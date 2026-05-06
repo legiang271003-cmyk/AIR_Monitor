@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UTT - Air Quality Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+    <!-- ECharts CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+    <!-- EmailJS CDN (For sending emails without backend) -->
+    <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/@emailjs/browser@3/dist/email.min.js"></script>
+</head>
+
+<body>
+    <div class="dashboard-container">
+        <header>
+            <div class="header-left">
+                <img src="logo.png" alt="UTT Logo" class="utt-logo" onerror="this.style.display='none'">
+                <div class="header-titles">
+                    <h1>UTT Air Monitor</h1>
+                    <p>Hệ thống giám sát chất lượng không khí - Đại học Công nghệ GTVT</p>
+                </div>
+            </div>
+            <div class="header-right">
+                <div class="status-badge" id="connection-status">
+                    <span class="status-dot"></span>
+                    <span class="status-text">Đang kết nối...</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- TABS NAVIGATION -->
+        <div class="tabs-nav">
+            <button class="tab-btn active" data-target="dashboard-tab"><i class="fa-solid fa-chart-pie"></i> Giám sát
+                (Dashboard)</button>
+            <button class="tab-btn" data-target="settings-tab"><i class="fa-solid fa-gear"></i> Cấu hình & Cảnh
+                báo</button>
+        </div>
+
+        <main>
+            <!-- DASHBOARD TAB -->
+            <div id="dashboard-tab" class="tab-pane active">
+                <div class="aqi-banner" id="aqi-banner">
+                    <div class="aqi-info">
+                        <h2>Chỉ số AQI (ENS160)</h2>
+                        <div class="aqi-value" id="val-aqi">--</div>
+                        <div class="aqi-label" id="label-aqi">Đang chờ dữ liệu...</div>
+                    </div>
+                    <div class="aqi-icon">
+                        <i class="fa-solid fa-shield-virus"></i>
+                    </div>
+                </div>
+
+                <!-- AI ADVISORY BOX -->
+                <div id="ai-advisory-box"
+                    style="background: linear-gradient(135deg, #ffffff, #f8fafc); border: 1px solid var(--card-border); border-radius: 1rem; padding: 1.5rem; margin-bottom: 2rem; display: flex; align-items: flex-start; gap: 1rem; box-shadow: 0 4px 15px rgba(0,0,0,0.03);">
+                    <div style="font-size: 2rem; color: var(--utt-blue);"><i class="fa-solid fa-robot"></i></div>
+                    <div style="flex: 1;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                            <h3 style="color: var(--utt-blue); font-size: 1.1rem; display: flex; align-items: center; gap: 0.5rem; font-weight: 700; margin: 0;">
+                                Trợ lý AI phân tích xu hướng
+                            </h3>
+                            <button id="btn-ask-gemini" style="background: linear-gradient(135deg, #10b981, #059669); color: white; border: none; padding: 0.4rem 0.8rem; border-radius: 0.5rem; cursor: pointer; font-family: inherit; font-weight: 600; font-size: 0.85rem; display: flex; align-items: center; gap: 0.3rem;">
+                                <i class="fa-solid fa-wand-magic-sparkles"></i> Hỏi Gemini AI
+                            </button>
+                        </div>
+                        <p id="ai-advice-text" style="color: var(--text-primary); line-height: 1.5; font-size: 1rem; font-weight: 500;">
+                            Đang thu thập dữ liệu lịch sử để tiến hành phân tích xu hướng không khí...
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Gauges Grid -->
+                <div class="gauges-grid">
+                    <div class="gauge-card">
+                        <div id="gauge-temp" class="gauge-chart"></div>
+                    </div>
+                    <div class="gauge-card">
+                        <div id="gauge-hum" class="gauge-chart"></div>
+                    </div>
+                    <div class="gauge-card">
+                        <div id="gauge-eco2" class="gauge-chart"></div>
+                    </div>
+                    <div class="gauge-card">
+                        <div id="gauge-tvoc" class="gauge-chart"></div>
+                    </div>
+                    <div class="gauge-card">
+                        <div id="gauge-pm1_0" class="gauge-chart"></div>
+                    </div>
+                    <div class="gauge-card">
+                        <div id="gauge-pm25" class="gauge-chart"></div>
+                    </div>
+                    <div class="gauge-card">
+                        <div id="gauge-pm10" class="gauge-chart"></div>
+                    </div>
+                </div>
+
+                <!-- Time Series Chart -->
+                <div class="chart-section">
+                    <div class="chart-header">
+                        <h3><i class="fa-solid fa-chart-line"></i> Biểu đồ thời gian thực</h3>
+                    </div>
+                    <div class="chart-container">
+                        <div id="history-chart" style="width: 100%; height: 100%;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SETTINGS TAB -->
+            <div id="settings-tab" class="tab-pane">
+                <div class="settings-grid">
+                    <div class="left-settings">
+                        <!-- LoRa Config -->
+                        <div class="settings-card" style="margin-bottom: 2rem;">
+                            <h3><i class="fa-solid fa-satellite-dish"></i> Kết nối LoRa (COM Port)</h3>
+                            <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.95rem;">Kết nối
+                                trực tiếp thiết bị thu LoRa (USB UART) qua cổng Serial Web API để nhận dữ liệu JSON.</p>
+                            <div style="margin-bottom: 1rem; font-weight: 500;">
+                                Trạng thái: <span id="lora-status-text" style="color: var(--status-offline);">Chưa kết
+                                    nối</span>
+                            </div>
+                            <div style="display: flex; gap: 1rem;">
+                                <button class="btn-primary" id="btn-connect-lora"
+                                    style="background: linear-gradient(135deg, var(--utt-blue), #003366); margin-top: 0;"><i
+                                        class="fa-solid fa-plug"></i> Kết nối LoRa</button>
+                                <button class="btn-primary" id="btn-disconnect-lora"
+                                    style="display: none; background: linear-gradient(135deg, #64748b, #475569); margin-top: 0;"><i
+                                        class="fa-solid fa-plug-circle-xmark"></i> Ngắt kết nối</button>
+                            </div>
+                        </div>
+
+                        <!-- MQTT Config -->
+                        <div class="settings-card">
+                            <h3><i class="fa-solid fa-network-wired"></i> Cấu hình MQTT</h3>
+                            <div class="form-group">
+                                <label>Broker URL (WebSocket)</label>
+                                <input type="text" id="cfg-mqtt-url" placeholder="wss://broker.hivemq.com:8884/mqtt">
+                            </div>
+                            <div class="form-group">
+                                <label>Username</label>
+                                <input type="text" id="cfg-mqtt-user">
+                            </div>
+                            <div class="form-group">
+                                <label>Password</label>
+                                <input type="password" id="cfg-mqtt-pass">
+                            </div>
+                            <div class="form-group">
+                                <label>Topic Nhận dữ liệu (Subscribe)</label>
+                                <input type="text" id="cfg-mqtt-topic">
+                            </div>
+                            <div style="display: flex; gap: 1rem;">
+                                <button class="btn-primary" id="btn-save-mqtt"
+                                    style="background: linear-gradient(135deg, var(--utt-blue), #003366); margin-top: 0;"><i
+                                        class="fa-solid fa-rotate"></i> Kết nối MQTT</button>
+                                <button class="btn-primary" id="btn-disconnect-mqtt"
+                                    style="display: none; background: linear-gradient(135deg, #64748b, #475569); margin-top: 0;"><i
+                                        class="fa-solid fa-plug-circle-xmark"></i> Ngắt MQTT</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Email & Alerts Config -->
+                    <div class="settings-card">
+                        <h3><i class="fa-solid fa-envelope-open-text"></i> Cảnh báo qua Email</h3>
+                        <div class="form-group">
+                            <label>Email nhận cảnh báo 1</label>
+                            <input type="email" id="cfg-email-1" placeholder="email1@utt.edu.vn">
+                        </div>
+                        <div class="form-group">
+                            <label>Email nhận cảnh báo 2 (Tùy chọn)</label>
+                            <input type="email" id="cfg-email-2" placeholder="email2@gmail.com">
+                        </div>
+                        <div class="form-group">
+                            <label>Email nhận cảnh báo 3 (Tùy chọn)</label>
+                            <input type="email" id="cfg-email-3" placeholder="email3@yahoo.com">
+                        </div>
+
+                        <h4 class="sub-heading"><i class="fa-solid fa-triangle-exclamation"></i> Ngưỡng cảnh báo (Vượt
+                            ngưỡng sẽ gửi Email)</h4>
+                        <div class="thresholds-grid">
+                            <div class="form-group">
+                                <label>Nhiệt độ tối đa (°C)</label>
+                                <input type="number" id="cfg-max-temp" value="35">
+                            </div>
+                            <div class="form-group">
+                                <label>Nhiệt độ tối thiểu (°C)</label>
+                                <input type="number" id="cfg-min-temp" value="15">
+                            </div>
+                            <div class="form-group">
+                                <label>Độ ẩm tối đa (%)</label>
+                                <input type="number" id="cfg-max-hum" value="80">
+                            </div>
+                            <div class="form-group">
+                                <label>Độ ẩm tối thiểu (%)</label>
+                                <input type="number" id="cfg-min-hum" value="30">
+                            </div>
+                            <div class="form-group">
+                                <label>PM2.5 tối đa (µg/m³)</label>
+                                <input type="number" id="cfg-max-pm25" value="50">
+                            </div>
+                            <div class="form-group">
+                                <label>eCO2 tối đa (ppm)</label>
+                                <input type="number" id="cfg-max-eco2" value="1000">
+                            </div>
+                            <div class="form-group">
+                                <label>TVOC tối đa (ppb)</label>
+                                <input type="number" id="cfg-max-tvoc" value="500">
+                            </div>
+                            <div class="form-group">
+                                <label>AQI tối đa (1-5)</label>
+                                <input type="number" id="cfg-max-aqi" value="3" min="1" max="5">
+                            </div>
+                        </div>
+                        <button class="btn-primary" id="btn-save-alerts"><i class="fa-solid fa-floppy-disk"></i> Lưu cấu hình cảnh báo</button>
+                    </div>
+
+                    <!-- GEMINI CONFIG -->
+                    <div class="settings-card" style="margin-top: 2rem;">
+                        <h3><i class="fa-solid fa-wand-magic-sparkles"></i> Mô hình Google Gemini 1.5</h3>
+                        <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.95rem;">Sử dụng Generative AI để phân tích dữ liệu không khí thực tế. Nhận API Key miễn phí tại <a href="https://aistudio.google.com/" target="_blank" style="color: var(--utt-blue); font-weight: bold;">Google AI Studio</a>.</p>
+                        <div class="form-group">
+                            <label>Gemini API Key</label>
+                            <input type="password" id="cfg-gemini-key" placeholder="AIzaSyB...">
+                        </div>
+                        <button class="btn-primary" id="btn-save-gemini" style="background: linear-gradient(135deg, #10b981, #059669);"><i class="fa-solid fa-check"></i> Lưu khóa Gemini</button>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <div class="toast-container" id="toast-container"></div>
+
+    <!-- Load MQTT.js from CDN -->
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <script src="config.js"></script>
+    <script src="script.js"></script>
+</body>
+
+</html>
