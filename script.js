@@ -246,20 +246,28 @@ chartPm10.setOption(getGaugeOption('PM10', 'µg/m³', 0, 200, 4, colorPm));
 const chartHistory = echarts.init(document.getElementById('history-chart'));
 const historyData = { time: [], temp: [], hum: [], pm1_0: [], pm25: [], pm10: [], eco2: [], tvoc: [] };
 const MAX_DATA_POINTS = 30;
-
 chartHistory.setOption({
     tooltip: { trigger: 'axis' },
-    legend: { data: ['Nhiệt độ (°C)', 'Độ ẩm (%)', 'PM2.5 (µg/m³)'], textStyle: { color: textColor } },
-    grid: { left: '3%', right: '4%', bottom: '5%', containLabel: true },
+    legend: { 
+        data: ['Nhiệt độ (°C)', 'Độ ẩm (%)', 'PM1.0 (µg/m³)', 'PM2.5 (µg/m³)', 'PM10 (µg/m³)', 'eCO2 (ppm)', 'TVOC (ppb)'], 
+        textStyle: { color: textColor },
+        type: 'scroll',
+        orient: 'horizontal'
+    },
+    grid: { left: '3%', right: '4%', bottom: '5%', top: '15%', containLabel: true },
     xAxis: { type: 'category', boundaryGap: false, data: historyData.time, axisLabel: { color: textColor } },
     yAxis: [
-        { type: 'value', name: 'Nhiệt độ/Độ ẩm', nameTextStyle: { color: textColor }, axisLabel: { color: textColor } },
-        { type: 'value', name: 'PM2.5', nameTextStyle: { color: textColor }, axisLabel: { color: textColor }, splitLine: { show: false } }
+        { type: 'value', name: 'Môi trường/Bụi', nameTextStyle: { color: textColor }, axisLabel: { color: textColor } },
+        { type: 'value', name: 'Khí (eCO2/TVOC)', nameTextStyle: { color: textColor }, axisLabel: { color: textColor }, splitLine: { show: false } }
     ],
     series: [
         { name: 'Nhiệt độ (°C)', type: 'line', smooth: true, itemStyle: { color: '#ef4444' }, data: historyData.temp },
         { name: 'Độ ẩm (%)', type: 'line', smooth: true, itemStyle: { color: '#3388dd' }, data: historyData.hum },
-        { name: 'PM2.5 (µg/m³)', type: 'line', smooth: true, yAxisIndex: 1, itemStyle: { color: '#f59e0b' }, data: historyData.pm25 }
+        { name: 'PM1.0 (µg/m³)', type: 'line', smooth: true, itemStyle: { color: '#10b981' }, data: historyData.pm1_0 },
+        { name: 'PM2.5 (µg/m³)', type: 'line', smooth: true, itemStyle: { color: '#f59e0b' }, data: historyData.pm25 },
+        { name: 'PM10 (µg/m³)', type: 'line', smooth: true, itemStyle: { color: '#8b5cf6' }, data: historyData.pm10 },
+        { name: 'eCO2 (ppm)', type: 'line', smooth: true, yAxisIndex: 1, itemStyle: { color: '#64748b' }, data: historyData.eco2 },
+        { name: 'TVOC (ppb)', type: 'line', smooth: true, yAxisIndex: 1, itemStyle: { color: '#ec4899' }, data: historyData.tvoc }
     ]
 });
 
@@ -311,7 +319,18 @@ function updateDashboard(data) {
             historyData.time.shift(); historyData.temp.shift(); historyData.hum.shift(); historyData.pm1_0.shift(); historyData.pm25.shift(); historyData.pm10.shift(); historyData.eco2.shift(); historyData.tvoc.shift();
         }
 
-        chartHistory.setOption({ xAxis: { data: historyData.time }, series: [{ data: historyData.temp }, { data: historyData.hum }, { data: historyData.pm25 }] });
+        chartHistory.setOption({ 
+            xAxis: { data: historyData.time }, 
+            series: [
+                { data: historyData.temp }, 
+                { data: historyData.hum }, 
+                { data: historyData.pm1_0 },
+                { data: historyData.pm25 },
+                { data: historyData.pm10 },
+                { data: historyData.eco2 },
+                { data: historyData.tvoc }
+            ] 
+        });
 
         // Check alerts
         checkThresholds(data);
