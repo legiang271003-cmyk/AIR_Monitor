@@ -9,15 +9,22 @@ const DEFAULT_CONFIG = {
     limits: SYS_CONFIG.DEFAULT_LIMITS
 };
 
-// Load configs from localStorage
-let appConfig = JSON.parse(localStorage.getItem('utt_air_config')) || DEFAULT_CONFIG;
-// Prevent missing keys if object structure changes
-if (!appConfig.geminiKey) appConfig.geminiKey = DEFAULT_CONFIG.geminiKey;
-appConfig.limits = { ...DEFAULT_CONFIG.limits, ...(appConfig.limits || {}) };
+// 1. Lấy dữ liệu đã lưu từ bộ nhớ trình duyệt
+let savedConfig = JSON.parse(localStorage.getItem('utt_air_config')) || {};
 
+// 2. LOGIC ĐỒNG BỘ: Nếu Key trong SYS_CONFIG khác với Key đang lưu ở máy, ưu tiên SYS_CONFIG
+if (SYS_CONFIG.GEMINI_API_KEY && SYS_CONFIG.GEMINI_API_KEY !== savedConfig.geminiKey) {
+    console.log("🔄 Hệ thống: Phát hiện API Key mới, đang đồng bộ dữ liệu...");
+    savedConfig.geminiKey = SYS_CONFIG.GEMINI_API_KEY;
+}
+
+let appConfig = { ...DEFAULT_CONFIG, ...savedConfig };
+appConfig.limits = { ...DEFAULT_CONFIG.limits, ...(savedConfig.limits || {}) };
+localStorage.setItem('utt_air_config', JSON.stringify(appConfig));
+
+// --- CÁC BIẾN TRẠNG THÁI (GIỮ NGUYÊN) ---
 let mqttClient = null;
-let lastEmailSentTime = {}; // To prevent email spamming (cooldown)
-
+let lastEmailSentTime = {};
 let isMqttConnected = false;
 let isLoraConnected = false;
 let lastDataTime = Date.now();
@@ -425,66 +432,99 @@ function analyzeAIAdvice() {
 
 // --- GOOGLE GEMINI AI LOGIC ---
 if (document.getElementById('btn-ask-gemini')) {
-    document.getElementById('btn-ask-gemini').addEventListener('click', askGeminiAI);
+    document.getElementById('btn-ask-gemini').addEventListener('click', () => {
+        const bubble = document.getElementById('ai-chat-bubble');
+        bubble.classList.add('active');
+        askGeminiAI();
+    });
+}
+
+if (document.getElementById('close-chat')) {
+    document.getElementById('close-chat').addEventListener('click', (e) => {
+        e.stopPropagation();
+        document.getElementById('ai-chat-bubble').classList.remove('active');
+    });
 }
 
 async function askGeminiAI() {
     const btnAsk = document.getElementById('btn-ask-gemini');
-    const aiText = document.getElementById('ai-advice-text');
+    const chatText = document.getElementById('chat-text');
+    const chatTime = document.getElementById('chat-time');
     const apiKey = appConfig.geminiKey;
 
     if (!apiKey) {
-        showToast('Lỗi Gemini', 'Vui lòng nhập API Key trong phần Cài đặt!', 'error');
+        showToast('Lỗi cấu hình', 'Vui lòng kiểm tra API Key trong Tab hệ thống.', 'error');
         return;
     }
 
-    // Vô hiệu hóa nút để tránh gửi yêu cầu chồng chéo (gây lỗi 429)
+    // Trạng thái chờ
     btnAsk.disabled = true;
-    btnAsk.innerHTML = '<i class="fa-solid fa-microchip fa-spin"></i> AI 3.1 Lite đang tính toán...';
-    aiText.innerHTML = '<span style="color: #10b981;">Đang gửi dữ liệu cảm biến cho chuyên gia AI...</span>';
+    chatText.innerHTML = '<i class="fa-solid fa-microchip fa-spin"></i> Đang xử lý dữ liệu từ cảm biến laser...';
 
-    const len = historyData.pm25.length;
-    const recentCount = Math.min(len, 12); // Lấy 12 mẫu gần nhất (~30s dữ liệu)
-    const startIndex = len - recentCount;
-
-    let dataTable = "Thời gian | PM1.0 | PM2.5 | PM10 | Temp | Hum | eCO2\n";
-    for (let i = startIndex; i < len; i++) {
-        dataTable += `${historyData.time[i]} | ${historyData.pm1_0[i]} | ${historyData.pm25[i]} | ${historyData.pm10[i]} | ${historyData.temp[i]}°C | ${historyData.hum[i]}% | ${historyData.eco2[i]} ppm\n`;
+    // Xử lý dữ liệu đầu vào (Lọc bỏ các giá trị lỗi để tránh Bad Request)
+    const len = historyData.time.length;
+    if (len < 5) {
+        chatText.innerHTML = "⚠️ Cần thêm dữ liệu để thực hiện phân tích đa thông số.";
+        btnAsk.disabled = false;
+        return;
     }
 
-    const prompt = `Bạn là chuyên gia y tế công cộng. Phân tích bảng dữ liệu bụi (đơn vị ug/m3)  và khí gas sau:
+    const startIndex = Math.max(0, len - 10);
+
+    // Xây dựng bảng dữ liệu ĐẦY ĐỦ (Full Parameters)
+    let dataTable = "T | PM1.0 | PM2.5 | PM10 | eCO2 | TVOC | T(°C) | H(%)\n";
+    for (let i = startIndex; i < len; i++) {
+        const d = {
+            p1: historyData.pm1_0[i] || 0,
+            p25: historyData.pm25[i] || 0,
+            p10: historyData.pm10[i] || 0,
+            co2: historyData.eco2[i] || 400,
+            voc: historyData.tvoc[i] || 0,
+            temp: historyData.temp[i] || 0,
+            hum: historyData.hum[i] || 0
+        };
+        dataTable += `${historyData.time[i]} | ${d.p1} | ${d.p25} | ${d.p10} | ${d.co2} | ${d.voc} | ${d.temp} | ${d.hum}\n`;
+    }
+
+    const promptText = `Bạn là chuyên gia phân tích dữ liệu môi trường. Hãy đánh giá bảng dữ liệu quan trắc thời gian thực sau:
 ${dataTable}
-Dựa trên nồng độ PM2.5 và eCO2, hãy dự đoán tình trạng phòng trong 5 phút tới và đưa ra 1 hành động khẩn cấp. Trả lời cực ngắn, súc tích, dùng emoji.`;
+Yêu cầu:
+1. Đánh giá sự tương quan giữa các chỉ số (ví dụ: Độ ẩm cao ảnh hưởng thế nào đến chỉ số bụi, hoặc sự liên quan giữa TVOC và eCO2).
+2. Đưa ra nhận định về chất lượng không khí tổng thể theo tiêu chuẩn sức khỏe.
+3. Dự báo xu hướng và đưa ra khuyến nghị xử lý kỹ thuật.
+Trả lời: Chuyên sâu, súc tích, trình bày rõ ràng, có dùng emoji.`;
 
     try {
-        // CẬP NHẬT MODEL: gemini-3.1-flash-lite
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`, {
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${apiKey}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+            body: JSON.stringify({
+                contents: [{ parts: [{ text: promptText }] }]
+            })
         });
 
-        if (response.status === 429) {
-            throw new Error("Hết hạn mức yêu cầu. Vui lòng đợi 30 giây!");
+        const result = await response.json();
+
+        if (!response.ok) {
+            // Nếu vẫn 400, log này sẽ chỉ chính xác nguyên nhân
+            console.error("Lỗi hệ thống:", result);
+            throw new Error(result.error?.message || "Yêu cầu không hợp lệ");
         }
 
-        if (!response.ok) throw new Error(`API Error: ${response.status}`);
-
-        const result = await response.json();
         const reply = result.candidates[0].content.parts[0].text;
 
-        aiText.innerHTML = `<span style="color: #059669;">✨ <strong>Chuyên gia AI 3.1 Lite nhận định:</strong></span><br>${reply.replace(/\n/g, '<br>')}`;
-        showToast('Thành công', 'Gemini đã phân tích xong dữ liệu.', 'success');
+        // Hiển thị kết quả với format chuyên nghiệp
+        chatText.innerHTML = reply.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
+        chatTime.innerText = new Date().toLocaleTimeString('vi-VN');
 
     } catch (error) {
         console.error("Gemini Error:", error);
-        aiText.innerHTML = `❌ <strong>Lỗi:</strong> ${error.message}`;
+        chatText.innerHTML = `<span style="color: #ef4444;">❌ <strong>Lỗi phân tích:</strong> ${error.message}</span>`;
     } finally {
-        // Mở khóa nút sau khi nhận phản hồi hoặc gặp lỗi
         btnAsk.disabled = false;
-        btnAsk.innerHTML = '<i class="fa-solid fa-robot"></i> Phân tích xu hướng AI';
     }
 }
+
 
 // --- MQTT CLIENT ---
 function connectMQTT() {
