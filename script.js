@@ -248,8 +248,8 @@ const historyData = { time: [], temp: [], hum: [], pm1_0: [], pm25: [], pm10: []
 const MAX_DATA_POINTS = 30;
 chartHistory.setOption({
     tooltip: { trigger: 'axis' },
-    legend: { 
-        data: ['Nhiệt độ (°C)', 'Độ ẩm (%)', 'PM1.0 (µg/m³)', 'PM2.5 (µg/m³)', 'PM10 (µg/m³)', 'eCO2 (ppm)', 'TVOC (ppb)'], 
+    legend: {
+        data: ['Nhiệt độ (°C)', 'Độ ẩm (%)', 'PM1.0 (µg/m³)', 'PM2.5 (µg/m³)', 'PM10 (µg/m³)', 'eCO2 (ppm)', 'TVOC (ppb)'],
         textStyle: { color: textColor },
         type: 'scroll',
         orient: 'horizontal'
@@ -319,17 +319,17 @@ function updateDashboard(data) {
             historyData.time.shift(); historyData.temp.shift(); historyData.hum.shift(); historyData.pm1_0.shift(); historyData.pm25.shift(); historyData.pm10.shift(); historyData.eco2.shift(); historyData.tvoc.shift();
         }
 
-        chartHistory.setOption({ 
-            xAxis: { data: historyData.time }, 
+        chartHistory.setOption({
+            xAxis: { data: historyData.time },
             series: [
-                { data: historyData.temp }, 
-                { data: historyData.hum }, 
+                { data: historyData.temp },
+                { data: historyData.hum },
                 { data: historyData.pm1_0 },
                 { data: historyData.pm25 },
                 { data: historyData.pm10 },
                 { data: historyData.eco2 },
                 { data: historyData.tvoc }
-            ] 
+            ]
         });
 
         // Check alerts
@@ -548,18 +548,27 @@ connectMQTT();
 // ==========================================
 let serialPort = null;
 let serialReader = null;
+let keepReading = false; // Cờ điều khiển vòng lặp
+let readLoopPromise = null; // Theo dõi luồng đọc
 
 async function connectLoRa() {
     try {
         if (!navigator.serial) {
-            showToast('Lỗi trình duyệt', 'Trình duyệt không hỗ trợ Web Serial API (Vui lòng dùng Chrome hoặc Edge mới nhất)', 'error');
+            let errorMsg = 'Trình duyệt không hỗ trợ Web Serial API.';
+            if (window.isSecureContext === false) {
+                errorMsg += ' (Yêu cầu HTTPS hoặc localhost để sử dụng tính năng này)';
+            } else {
+                errorMsg += ' (Vui lòng dùng Chrome hoặc Edge mới nhất)';
+            }
+            showToast('Lỗi trình duyệt', errorMsg, 'error');
             return;
         }
 
+        const baudRate = parseInt(document.getElementById('cfg-lora-baud').value) || 9600;
         serialPort = await navigator.serial.requestPort();
-        await serialPort.open({ baudRate: 9600 }); // Baudrate trùng với firmware ESP32 LoRa
+        await serialPort.open({ baudRate: baudRate });
 
-        document.getElementById('lora-status-text').innerText = 'Đã kết nối cổng COM';
+        document.getElementById('lora-status-text').innerText = `Đã kết nối (COM @ ${baudRate})`;
         document.getElementById('lora-status-text').style.color = 'var(--status-excellent)';
         document.getElementById('btn-connect-lora').style.display = 'none';
         document.getElementById('btn-disconnect-lora').style.display = 'flex';
@@ -578,82 +587,90 @@ async function connectLoRa() {
 
 async function disconnectLoRa() {
     try {
+        console.log("Đang bắt đầu ngắt kết nối LoRa...");
+        keepReading = false; // Bước 1: Hạ cờ dừng vòng lặp
+
         if (serialReader) {
-            // Cancel the reader to break out of readSerialLoop
+            // Bước 2: Hủy lệnh read() đang treo để luồng chạy xuống finally
             await serialReader.cancel().catch(() => { });
         }
 
-        // Cần phải đợi vòng lặp đọc (readSerialLoop) dọn dẹp xong lock trước khi đóng Port
-        // Tuy nhiên để đơn giản và tránh race condition, ta có thể đóng port trong readSerialLoop luôn
-        // Hoặc cứ đóng nếu không bị lock
-        if (serialPort) {
-            await serialPort.close().catch(() => { });
-            serialPort = null;
+        if (readLoopPromise) {
+            // Bước 3: Đợi cho đến khi vòng lặp thoát hẳn và nhả Lock
+            await readLoopPromise;
+            readLoopPromise = null;
         }
 
+        if (serialPort) {
+            // Bước 4: Bây giờ đóng port sẽ cực kỳ an toàn, không bao giờ bị đơ
+            await serialPort.close();
+            serialPort = null;
+            console.log("Đã đóng cổng Serial thành công.");
+        }
+
+        // Cập nhật giao diện UI
         document.getElementById('lora-status-text').innerText = 'Chưa kết nối';
         document.getElementById('lora-status-text').style.color = 'var(--status-offline)';
         document.getElementById('btn-connect-lora').style.display = 'flex';
         document.getElementById('btn-disconnect-lora').style.display = 'none';
 
-        showToast('Đã ngắt', 'Đã ngắt kết nối cổng COM', 'warning');
-
         isLoraConnected = false;
         updateConnectionStatusBadge();
+        showToast('Đã ngắt', 'Đã đóng cổng COM an toàn', 'warning');
+
     } catch (e) {
         console.error("Lỗi ngắt kết nối LoRa:", e);
+        showToast('Lỗi', 'Không thể ngắt kết nối sạch sẽ', 'error');
     }
 }
 
 async function readSerialLoop() {
-    while (serialPort && serialPort.readable) {
-        const textDecoder = new TextDecoderStream();
-        const readableStreamClosed = serialPort.readable.pipeTo(textDecoder.writable);
-        serialReader = textDecoder.readable.getReader();
+    keepReading = true;
+    const PACKET_SIZE = 16;
+    let buffer = new Uint8Array(0);
 
-        let buffer = '';
-        try {
-            while (true) {
-                const { value, done } = await serialReader.read();
-                if (done) {
-                    break;
-                }
-                if (value) {
-                    buffer += value;
-                    let lines = buffer.split('\n');
-                    buffer = lines.pop(); // Giữ lại phần chuỗi bị cắt dở cuối cùng
+    // Bọc vòng lặp vào promise để có thể 'await' ở hàm disconnect
+    readLoopPromise = (async () => {
+        while (serialPort && serialPort.readable && keepReading) {
+            serialReader = serialPort.readable.getReader();
+            try {
+                while (keepReading) {
+                    const { value, done } = await serialReader.read();
+                    if (done || !keepReading) break;
 
-                    for (let line of lines) {
-                        line = line.trim();
-                        // Đảm bảo là một chuỗi JSON hợp lệ
-                        if (line.startsWith('{') && line.endsWith('}')) {
-                            try {
-                                const data = JSON.parse(line);
-                                console.log("LoRa RX:", data);
-                                updateDashboard(data); // Cập nhật y hệt như nhận từ MQTT
-                            } catch (err) {
-                                console.error("Parse JSON LoRa thất bại:", err);
-                            }
-                        }
+                    // Logic ghép nối và xử lý Binary (Giữ nguyên của bạn)
+                    let newBuffer = new Uint8Array(buffer.length + value.length);
+                    newBuffer.set(buffer);
+                    newBuffer.set(value, buffer.length);
+                    buffer = newBuffer;
+
+                    while (buffer.length >= PACKET_SIZE) {
+                        const packet = buffer.slice(0, PACKET_SIZE);
+                        buffer = buffer.slice(PACKET_SIZE);
+                        const view = new DataView(packet.buffer);
+                        const data = {
+                            pm1_0: view.getUint16(0, true),
+                            pm2_5: view.getUint16(2, true),
+                            pm10: view.getUint16(4, true),
+                            temp: view.getInt16(6, true) / 10.0,
+                            hum: view.getInt16(8, true) / 10.0,
+                            aqi: view.getUint16(10, true),
+                            tvoc: view.getUint16(12, true),
+                            eco2: view.getUint16(14, true)
+                        };
+                        updateDashboard(data);
                     }
                 }
+            } catch (error) {
+                // Chỉ log lỗi nếu không phải do chúng ta chủ động ngắt
+                if (keepReading) console.error("Lỗi đọc dữ liệu:", error);
+            } finally {
+                serialReader.releaseLock();
+                serialReader = null;
+                console.log("Đã giải phóng Serial Reader Lock");
             }
-        } catch (error) {
-            console.error("Lỗi đọc dữ liệu LoRa:", error);
-        } finally {
-            // Giải phóng lock của reader
-            serialReader.releaseLock();
-            serialReader = null;
         }
-
-        // Đợi pipeTo hoàn tất để nhả lock trên serialPort.readable
-        try {
-            await readableStreamClosed.catch(() => { });
-        } catch (e) { }
-
-        // Thoát vòng lặp khi kết thúc luồng
-        break;
-    }
+    })();
 }
 
 document.getElementById('btn-connect-lora').addEventListener('click', connectLoRa);
