@@ -391,7 +391,8 @@ header {
     font-size: 0.95rem;
 }
 
-.form-group input {
+.form-group input, 
+.form-group select {
     width: 100%;
     background: #f8fafc;
     border: 1px solid #cbd5e1;
@@ -405,7 +406,8 @@ header {
     transition: border-color 0.3s, box-shadow 0.3s;
 }
 
-.form-group input:focus {
+.form-group input:focus,
+.form-group select:focus {
     border-color: var(--utt-blue);
     box-shadow: 0 0 0 3px rgba(0, 91, 181, 0.1);
 }
