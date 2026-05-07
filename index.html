@@ -59,15 +59,19 @@
                     style="background: linear-gradient(135deg, #ffffff, #f8fafc); border: 1px solid var(--card-border); border-radius: 1rem; padding: 1.5rem; margin-bottom: 2rem; display: flex; align-items: flex-start; gap: 1rem; box-shadow: 0 4px 15px rgba(0,0,0,0.03);">
                     <div style="font-size: 2rem; color: var(--utt-blue);"><i class="fa-solid fa-robot"></i></div>
                     <div style="flex: 1;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-                            <h3 style="color: var(--utt-blue); font-size: 1.1rem; display: flex; align-items: center; gap: 0.5rem; font-weight: 700; margin: 0;">
+                        <div
+                            style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                            <h3
+                                style="color: var(--utt-blue); font-size: 1.1rem; display: flex; align-items: center; gap: 0.5rem; font-weight: 700; margin: 0;">
                                 Trợ lý AI phân tích xu hướng
                             </h3>
-                            <button id="btn-ask-gemini" style="background: linear-gradient(135deg, #10b981, #059669); color: white; border: none; padding: 0.4rem 0.8rem; border-radius: 0.5rem; cursor: pointer; font-family: inherit; font-weight: 600; font-size: 0.85rem; display: flex; align-items: center; gap: 0.3rem;">
+                            <button id="btn-ask-gemini"
+                                style="background: linear-gradient(135deg, #10b981, #059669); color: white; border: none; padding: 0.4rem 0.8rem; border-radius: 0.5rem; cursor: pointer; font-family: inherit; font-weight: 600; font-size: 0.85rem; display: flex; align-items: center; gap: 0.3rem;">
                                 <i class="fa-solid fa-wand-magic-sparkles"></i> Hỏi Gemini AI
                             </button>
                         </div>
-                        <p id="ai-advice-text" style="color: var(--text-primary); line-height: 1.5; font-size: 1rem; font-weight: 500;">
+                        <p id="ai-advice-text"
+                            style="color: var(--text-primary); line-height: 1.5; font-size: 1rem; font-weight: 500;">
                             Đang thu thập dữ liệu lịch sử để tiến hành phân tích xu hướng không khí...
                         </p>
                     </div>
@@ -121,6 +125,17 @@
                             <div style="margin-bottom: 1rem; font-weight: 500;">
                                 Trạng thái: <span id="lora-status-text" style="color: var(--status-offline);">Chưa kết
                                     nối</span>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 1rem;">
+                                <label>Tốc độ Baud (Baud Rate)</label>
+                                <select id="cfg-lora-baud"
+                                    style="width: 100%; padding: 0.6rem; border-radius: 0.5rem; border: 1px solid var(--card-border); background: white; font-family: inherit;">
+                                    <option value="9600">9600</option>
+                                    <option value="115200">115200</option>
+                                    <option value="57600">57600</option>
+                                    <option value="38400">38400</option>
+                                    <option value="19200">19200</option>
+                                </select>
                             </div>
                             <div style="display: flex; gap: 1rem;">
                                 <button class="btn-primary" id="btn-connect-lora"
@@ -214,18 +229,24 @@
                                 <input type="number" id="cfg-max-aqi" value="3" min="1" max="5">
                             </div>
                         </div>
-                        <button class="btn-primary" id="btn-save-alerts"><i class="fa-solid fa-floppy-disk"></i> Lưu cấu hình cảnh báo</button>
+                        <button class="btn-primary" id="btn-save-alerts"><i class="fa-solid fa-floppy-disk"></i> Lưu cấu
+                            hình cảnh báo</button>
                     </div>
 
                     <!-- GEMINI CONFIG -->
                     <div class="settings-card" style="margin-top: 2rem;">
                         <h3><i class="fa-solid fa-wand-magic-sparkles"></i> Mô hình Google Gemini 1.5</h3>
-                        <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.95rem;">Sử dụng Generative AI để phân tích dữ liệu không khí thực tế. Nhận API Key miễn phí tại <a href="https://aistudio.google.com/" target="_blank" style="color: var(--utt-blue); font-weight: bold;">Google AI Studio</a>.</p>
+                        <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.95rem;">Sử dụng
+                            Generative AI để phân tích dữ liệu không khí thực tế. Nhận API Key miễn phí tại <a
+                                href="https://aistudio.google.com/" target="_blank"
+                                style="color: var(--utt-blue); font-weight: bold;">Google AI Studio</a>.</p>
                         <div class="form-group">
                             <label>Gemini API Key</label>
                             <input type="password" id="cfg-gemini-key" placeholder="AIzaSyB...">
                         </div>
-                        <button class="btn-primary" id="btn-save-gemini" style="background: linear-gradient(135deg, #10b981, #059669);"><i class="fa-solid fa-check"></i> Lưu khóa Gemini</button>
+                        <button class="btn-primary" id="btn-save-gemini"
+                            style="background: linear-gradient(135deg, #10b981, #059669);"><i
+                                class="fa-solid fa-check"></i> Lưu khóa Gemini</button>
                     </div>
                 </div>
             </div>
