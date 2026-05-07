@@ -5,12 +5,14 @@ const DEFAULT_CONFIG = {
     mqttPass: SYS_CONFIG.MQTT_DEFAULT_PASS,
     mqttTopic: SYS_CONFIG.MQTT_DEFAULT_TOPIC,
     email: '',
+    geminiKey: SYS_CONFIG.GEMINI_API_KEY,
     limits: SYS_CONFIG.DEFAULT_LIMITS
 };
 
 // Load configs from localStorage
 let appConfig = JSON.parse(localStorage.getItem('utt_air_config')) || DEFAULT_CONFIG;
 // Prevent missing keys if object structure changes
+if (!appConfig.geminiKey) appConfig.geminiKey = DEFAULT_CONFIG.geminiKey;
 appConfig.limits = { ...DEFAULT_CONFIG.limits, ...(appConfig.limits || {}) };
 
 let mqttClient = null;
@@ -427,53 +429,60 @@ if (document.getElementById('btn-ask-gemini')) {
 }
 
 async function askGeminiAI() {
+    const btnAsk = document.getElementById('btn-ask-gemini');
+    const aiText = document.getElementById('ai-advice-text');
     const apiKey = appConfig.geminiKey;
+
     if (!apiKey) {
-        showToast('Lỗi Gemini', 'Vui lòng nhập Gemini API Key trong Tab Cài đặt để sử dụng tính năng này!', 'error');
+        showToast('Lỗi Gemini', 'Vui lòng nhập API Key trong phần Cài đặt!', 'error');
         return;
     }
+
+    // Vô hiệu hóa nút để tránh gửi yêu cầu chồng chéo (gây lỗi 429)
+    btnAsk.disabled = true;
+    btnAsk.innerHTML = '<i class="fa-solid fa-microchip fa-spin"></i> AI 3.1 Lite đang tính toán...';
+    aiText.innerHTML = '<span style="color: #10b981;">Đang gửi dữ liệu cảm biến cho chuyên gia AI...</span>';
 
     const len = historyData.pm25.length;
-    if (len === 0) {
-        showToast('Chưa có dữ liệu', 'Hệ thống đang chờ dữ liệu từ cảm biến. Vui lòng thử lại sau!', 'warning');
-        return;
-    }
-
-    const aiText = document.getElementById('ai-advice-text');
-    aiText.innerHTML = '<span style="color: #10b981;"><i class="fa-solid fa-spinner fa-spin"></i> Gemini 2.5 Flash đang phân tích dữ liệu...</span>';
-
-    // Lấy tối đa 10 dữ liệu gần nhất để gửi cho AI (giúp AI nhận biết xu hướng)
-    const recentCount = Math.min(len, 10);
+    const recentCount = Math.min(len, 12); // Lấy 12 mẫu gần nhất (~30s dữ liệu)
     const startIndex = len - recentCount;
 
-    let dataTable = "Thời gian | Nhiệt độ | Độ ẩm | PM1.0 | PM2.5 | PM10 | eCO2 | TVOC\n";
+    let dataTable = "Thời gian | PM1.0 | PM2.5 | PM10 | Temp | Hum | eCO2\n";
     for (let i = startIndex; i < len; i++) {
-        dataTable += `${historyData.time[i]} | ${historyData.temp[i]}°C | ${historyData.hum[i]}% | ${historyData.pm1_0[i]} | ${historyData.pm25[i]} | ${historyData.pm10[i]} | ${historyData.eco2[i]} ppm | ${historyData.tvoc[i]} ppb\n`;
+        dataTable += `${historyData.time[i]} | ${historyData.pm1_0[i]} | ${historyData.pm25[i]} | ${historyData.pm10[i]} | ${historyData.temp[i]}°C | ${historyData.hum[i]}% | ${historyData.eco2[i]} ppm\n`;
     }
 
-    const prompt = `Bạn là một chuyên gia về chất lượng không khí, hô hấp và y tế công cộng. Dưới đây là bảng dữ liệu môi trường đo được liên tục gần đây trong một phòng kín:
+    const prompt = `Bạn là chuyên gia y tế công cộng. Phân tích bảng dữ liệu bụi (đơn vị ug/m3)  và khí gas sau:
 ${dataTable}
-Hãy phân tích ngắn gọn tình trạng và XU HƯỚNG của không khí hiện tại, sau đó đưa ra 1 lời khuyên thực tế để bảo vệ sức khỏe người trong phòng. Viết bằng tiếng Việt, rất thân thiện, súc tích (tối đa 80 từ) và có dùng emoji. Bắt buộc không cần dòng chào hỏi. `;
+Dựa trên nồng độ PM2.5 và eCO2, hãy dự đoán tình trạng phòng trong 5 phút tới và đưa ra 1 hành động khẩn cấp. Trả lời cực ngắn, súc tích, dùng emoji.`;
 
     try {
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`, {
+        // CẬP NHẬT MODEL: gemini-3.1-flash-lite
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
         });
 
-        if (!response.ok) {
-            throw new Error(`API Error: ${response.status}`);
+        if (response.status === 429) {
+            throw new Error("Hết hạn mức yêu cầu. Vui lòng đợi 30 giây!");
         }
+
+        if (!response.ok) throw new Error(`API Error: ${response.status}`);
 
         const result = await response.json();
         const reply = result.candidates[0].content.parts[0].text;
 
-        aiText.innerHTML = `<span style="color: #059669;">✨ <strong>Chuyên gia Gemini nhận định: </strong></span><br>${reply.replace(/\n/g, '<br>')}`;
+        aiText.innerHTML = `<span style="color: #059669;">✨ <strong>Chuyên gia AI 3.1 Lite nhận định:</strong></span><br>${reply.replace(/\n/g, '<br>')}`;
+        showToast('Thành công', 'Gemini đã phân tích xong dữ liệu.', 'success');
+
     } catch (error) {
         console.error("Gemini Error:", error);
-        aiText.innerHTML = `❌ <strong>Lỗi kết nối AI:</strong> Không thể kết nối với máy chủ Google Gemini. Vui lòng kiểm tra lại kết nối mạng hoặc API Key.`;
-        showToast('Lỗi API', 'Gọi Gemini thất bại, nhấn F12 để xem chi tiết.', 'error');
+        aiText.innerHTML = `❌ <strong>Lỗi:</strong> ${error.message}`;
+    } finally {
+        // Mở khóa nút sau khi nhận phản hồi hoặc gặp lỗi
+        btnAsk.disabled = false;
+        btnAsk.innerHTML = '<i class="fa-solid fa-robot"></i> Phân tích xu hướng AI';
     }
 }
 
