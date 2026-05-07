@@ -459,7 +459,7 @@ async function askGeminiAI() {
 
     // Trạng thái chờ
     btnAsk.disabled = true;
-    chatText.innerHTML = '<i class="fa-solid fa-microchip fa-spin"></i> Đang xử lý dữ liệu từ cảm biến laser...';
+    chatText.innerHTML = '<i class="fa-solid fa-microchip fa-spin"></i> Đang phân tích 10 mẫu dữ liệu gần nhất...';
 
     // Xử lý dữ liệu đầu vào (Lọc bỏ các giá trị lỗi để tránh Bad Request)
     const len = historyData.time.length;
