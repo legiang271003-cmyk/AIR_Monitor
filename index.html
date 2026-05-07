@@ -63,17 +63,20 @@
                             style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
                             <h3
                                 style="color: var(--utt-blue); font-size: 1.1rem; display: flex; align-items: center; gap: 0.5rem; font-weight: 700; margin: 0;">
-                                Trợ lý AI phân tích xu hướng
+                                <i class="fa-solid fa-microchip"></i> Hệ thống Phân tích & Dự báo
                             </h3>
-                            <button id="btn-ask-gemini"
-                                style="background: linear-gradient(135deg, #10b981, #059669); color: white; border: none; padding: 0.4rem 0.8rem; border-radius: 0.5rem; cursor: pointer; font-family: inherit; font-weight: 600; font-size: 0.85rem; display: flex; align-items: center; gap: 0.3rem;">
-                                <i class="fa-solid fa-wand-magic-sparkles"></i> Hỏi Gemini AI
-                            </button>
                         </div>
-                        <p id="ai-advice-text"
-                            style="color: var(--text-primary); line-height: 1.5; font-size: 1rem; font-weight: 500;">
-                            Đang thu thập dữ liệu lịch sử để tiến hành phân tích xu hướng không khí...
-                        </p>
+                        <div id="ai-response-container">
+                            <p id="ai-advice-text"
+                                style="color: var(--text-primary); line-height: 1.5; font-size: 1rem; font-weight: 500; margin-bottom: 0.5rem;">
+                                Đang thu thập dữ liệu lịch sử để tiến hành phân tích xu hướng không khí...
+                            </p>
+                            <div id="gemini-response-area"
+                                style="display: none; padding-top: 0.8rem; border-top: 1px dashed var(--card-border); margin-top: 0.5rem;">
+                                <p id="gemini-text"
+                                    style="color: #059669; line-height: 1.5; font-size: 0.95rem; font-weight: 500;"></p>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -254,6 +257,27 @@
     </div>
 
     <div class="toast-container" id="toast-container"></div>
+
+    <!-- AI VIRTUAL ASSISTANT -->
+    <div class="ai-assistant-wrapper">
+        <div id="ai-chat-bubble" class="chat-bubble">
+            <div class="chat-header">
+                <span class="ai-name"><i class="fa-solid fa-robot"></i> Trợ lý Phân tích Không Khí</span>
+                <button id="close-chat" class="close-chat-btn"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="chat-content">
+                <p id="chat-text">Xin chào! Tôi là trợ lý ảo Gemini. Hãy nhấn vào robot để tôi phân tích dữ liệu không
+                    khí giúp bạn!</p>
+            </div>
+            <div class="chat-footer">
+                <small id="chat-time">Vừa xong</small>
+            </div>
+        </div>
+        <button id="btn-ask-gemini" class="robot-trigger">
+            <img src="chat-bot.png" alt="AI Assistant" class="robot-img">
+            <div class="pulse-ring"></div>
+        </button>
+    </div>
 
     <!-- Load MQTT.js from CDN -->
     <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
