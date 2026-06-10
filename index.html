@@ -12,8 +12,15 @@
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
     <!-- EmailJS CDN (For sending emails without backend) -->
     <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/@emailjs/browser@3/dist/email.min.js"></script>
+    <!-- Leaflet CSS & JS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <!-- SheetJS for Excel Export -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 </head>
-
+ 
 <body>
     <div class="dashboard-container">
         <header>
@@ -43,9 +50,16 @@
         <main>
             <!-- DASHBOARD TAB -->
             <div id="dashboard-tab" class="tab-pane active">
+                <!-- STATION SELECTOR -->
+                <div class="station-selector" id="station-selector">
+                    <button class="station-btn active" data-station="1"><i class="fa-solid fa-tower-broadcast"></i> Trạm
+                        1 (LoRa)</button>
+                    <button class="station-btn" data-station="2"><i class="fa-solid fa-wifi"></i> Trạm 2 (MQTT)</button>
+                </div>
+
                 <div class="aqi-banner" id="aqi-banner">
                     <div class="aqi-info">
-                        <h2>Chỉ số AQI (ENS160)</h2>
+                        <h2>Chỉ số AQI (Tiêu chuẩn EPA)</h2>
                         <div class="aqi-value" id="val-aqi">--</div>
                         <div class="aqi-label" id="label-aqi">Đang chờ dữ liệu...</div>
                     </div>
@@ -80,6 +94,18 @@
                     </div>
                 </div>
 
+                <!-- Map Section -->
+                <div class="map-section"
+                    style="margin-bottom: 2rem; background: var(--card-bg); border-radius: 1.5rem; padding: 1.5rem; border: 1px solid var(--card-border); box-shadow: 0 4px 15px rgba(0, 0, 0, 0.03);">
+                    <div class="chart-header" style="margin-bottom: 1rem;">
+                        <h3
+                            style="font-size: 1.2rem; font-weight: 600; display: flex; align-items: center; gap: 0.75rem;">
+                            <i class="fa-solid fa-map-location-dot" style="color: var(--utt-blue-light);"></i> Bản đồ Vị
+                            trí Trạm (UTT)</h3>
+                    </div>
+                    <div id="station-map" style="height: 350px; width: 100%; border-radius: 1rem; z-index: 1;"></div>
+                </div>
+
                 <!-- Gauges Grid -->
                 <div class="gauges-grid">
                     <div class="gauge-card">
@@ -107,8 +133,12 @@
 
                 <!-- Time Series Chart -->
                 <div class="chart-section">
-                    <div class="chart-header">
+                    <div class="chart-header"
+                        style="display: flex; justify-content: space-between; align-items: center;">
                         <h3><i class="fa-solid fa-chart-line"></i> Biểu đồ thời gian thực</h3>
+                        <button id="btn-export-excel"
+                            style="background: #10b981; color: white; border: none; padding: 0.6rem 1rem; border-radius: 0.5rem; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 0.5rem; transition: background 0.3s;"><i
+                                class="fa-solid fa-file-excel"></i> Xuất Excel</button>
                     </div>
                     <div class="chart-container">
                         <div id="history-chart" style="width: 100%; height: 100%;"></div>
@@ -228,29 +258,14 @@
                                 <input type="number" id="cfg-max-tvoc" value="500">
                             </div>
                             <div class="form-group">
-                                <label>AQI tối đa (1-5)</label>
-                                <input type="number" id="cfg-max-aqi" value="3" min="1" max="5">
+                                <label>AQI tối đa (EPA 0-500)</label>
+                                <input type="number" id="cfg-max-aqi" value="100" min="0" max="500">
                             </div>
                         </div>
                         <button class="btn-primary" id="btn-save-alerts"><i class="fa-solid fa-floppy-disk"></i> Lưu cấu
                             hình cảnh báo</button>
                     </div>
 
-                    <!-- GEMINI CONFIG -->
-                    <div class="settings-card" style="margin-top: 2rem;">
-                        <h3><i class="fa-solid fa-wand-magic-sparkles"></i> Mô hình Google Gemini 1.5</h3>
-                        <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.95rem;">Sử dụng
-                            Generative AI để phân tích dữ liệu không khí thực tế. Nhận API Key miễn phí tại <a
-                                href="https://aistudio.google.com/" target="_blank"
-                                style="color: var(--utt-blue); font-weight: bold;">Google AI Studio</a>.</p>
-                        <div class="form-group">
-                            <label>Gemini API Key</label>
-                            <input type="password" id="cfg-gemini-key" placeholder="AIzaSyB...">
-                        </div>
-                        <button class="btn-primary" id="btn-save-gemini"
-                            style="background: linear-gradient(135deg, #10b981, #059669);"><i
-                                class="fa-solid fa-check"></i> Lưu khóa Gemini</button>
-                    </div>
                 </div>
             </div>
         </main>
