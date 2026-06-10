@@ -197,6 +197,46 @@ header {
     }
 }
 
+/* STATION SELECTOR */
+.station-selector {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    background: var(--card-bg);
+    padding: 0.5rem;
+    border-radius: 1rem;
+    border: 1px solid var(--card-border);
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.02);
+}
+
+.station-btn {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 1.05rem;
+    font-weight: 600;
+    padding: 0.8rem;
+    cursor: pointer;
+    border-radius: 0.8rem;
+    transition: all 0.3s;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.station-btn:hover {
+    background: rgba(0, 91, 181, 0.05);
+    color: var(--utt-blue);
+}
+
+.station-btn.active {
+    background: linear-gradient(135deg, var(--utt-blue), var(--utt-blue-dark));
+    color: white;
+    box-shadow: 0 4px 15px rgba(0, 91, 181, 0.2);
+}
+
 /* AQI Banner */
 .aqi-banner {
     background: linear-gradient(135deg, var(--utt-blue), var(--utt-blue-dark));
