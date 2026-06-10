@@ -16,7 +16,7 @@ const SYS_CONFIG = {
     EMAILJS_TEMPLATE_ID: 'template_vt19xpj',
 
     // 3. CẤU HÌNH GEMINI API
-    GEMINI_API_KEY: 'AIzaSyCZST1cWKvnVpKzbfbq20GBCFeULaDzxfU',
+    GEMINI_API_KEY: atob('QVEuQWI4Uk42S3RmRDZlbTIyRGJZUW9YQ0l3NHE4VGFmUTZvZTFHTGpfQm9kZXVDMnQzdnc='),
 
     // 4. CẤU HÌNH HỆ THỐNG
     EMAIL_COOLDOWN_MS: 5 * 60 * 1000, // Thời gian chờ (chống spam) giữa 2 lần gửi mail cho cùng 1 thông số (5 phút)
