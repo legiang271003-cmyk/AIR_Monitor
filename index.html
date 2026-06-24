@@ -59,21 +59,17 @@
             <div id="dashboard-tab" class="tab-pane active">
                 <!-- STATION SELECTOR -->
                 <div class="station-selector" id="station-selector">
-                    <button class="station-btn active" data-station="1"><i class="fa-solid fa-tower-broadcast"></i> Trạm
-                        1 (LoRa)</button>
-                    <button class="station-btn" data-station="2"><i class="fa-solid fa-wifi"></i> Trạm 2 (MQTT)</button>
+                    <button class="station-btn active" data-station="1">
+                        <i class="fa-solid fa-tower-broadcast"></i>
+                        <span class="station-btn-content">Trạm 1 (LoRa)<small id="station-freshness-1"
+                                class="station-freshness" data-state="waiting">Chờ dữ liệu</small></span>
+                    </button>
+                    <button class="station-btn" data-station="2">
+                        <i class="fa-solid fa-wifi"></i>
+                        <span class="station-btn-content">Trạm 2 (MQTT)<small id="station-freshness-2"
+                                class="station-freshness" data-state="waiting">Chờ dữ liệu</small></span>
+                    </button>
                 </div>
-                <div class="aqi-banner" id="aqi-banner">
-                    <div class="aqi-info">
-                        <h2>Chỉ số AQI (Tiêu chuẩn EPA)</h2>
-                        <div class="aqi-value" id="val-aqi">--</div>
-                        <div class="aqi-label" id="label-aqi">Đang chờ dữ liệu...</div>
-                    </div>
-                    <div class="aqi-icon">
-                        <i class="fa-solid fa-shield-virus"></i>
-                    </div>
-                </div>
-
                 <!-- Map Section -->
                 <div class="map-section"
                     style="margin-bottom: 2rem; background: var(--card-bg); border-radius: 1.5rem; padding: 1.5rem; border: 1px solid var(--card-border); box-shadow: 0 4px 15px rgba(0, 0, 0, 0.03);">
@@ -85,6 +81,17 @@
                         </h3>
                     </div>
                     <div id="station-map" style="height: 350px; width: 100%; border-radius: 1rem; z-index: 1;"></div>
+                </div>
+
+                <div class="aqi-banner" id="aqi-banner">
+                    <div class="aqi-info">
+                        <h2>Chỉ số AQI từ PM2.5/PM10 (EPA)</h2>
+                        <div class="aqi-value" id="val-aqi">--</div>
+                        <div class="aqi-label" id="label-aqi">Đang chờ dữ liệu...</div>
+                    </div>
+                    <div class="aqi-icon">
+                        <i class="fa-solid fa-shield-virus"></i>
+                    </div>
                 </div>
 
                 <!-- AI ADVISORY BOX -->
@@ -140,12 +147,46 @@
 
                 <!-- Time Series Chart -->
                 <div class="chart-section">
-                    <div class="chart-header"
-                        style="display: flex; justify-content: space-between; align-items: center;">
+                    <div class="chart-header chart-header-with-actions">
                         <h3><i class="fa-solid fa-chart-line"></i> Biểu đồ thời gian thực</h3>
-                        <button id="btn-export-excel"
-                            style="background: #10b981; color: white; border: none; padding: 0.6rem 1rem; border-radius: 0.5rem; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 0.5rem; transition: background 0.3s;"><i
-                                class="fa-solid fa-file-excel"></i> Xuất Excel</button>
+                        <div class="chart-actions">
+                            <label class="chart-filter">
+                                <span>Nhóm</span>
+                                <select id="chart-metric-filter">
+                                    <option value="all">Tất cả</option>
+                                    <option value="environment">Nhiệt ẩm</option>
+                                    <option value="dust">Bụi</option>
+                                    <option value="gas">Khí</option>
+                                    <option value="custom">Tùy chọn</option>
+                                </select>
+                            </label>
+                            <label class="chart-filter">
+                                <span>Hiển thị</span>
+                                <select id="chart-point-filter">
+                                    <option value="5" selected>5 phút</option>
+                                    <option value="30">30 phút</option>
+                                    <option value="60">1 giờ</option>
+                                </select>
+                            </label>
+                            <details class="series-picker" id="series-picker">
+                                <summary><i class="fa-solid fa-list-check"></i> Từng đường</summary>
+                                <div class="series-picker-menu">
+                                    <label><input type="checkbox" data-chart-series="Nhiệt độ (°C)" checked> Nhiệt độ</label>
+                                    <label><input type="checkbox" data-chart-series="Độ ẩm (%)" checked> Độ ẩm</label>
+                                    <label><input type="checkbox" data-chart-series="PM1.0 (µg/m³)" checked> PM1.0</label>
+                                    <label><input type="checkbox" data-chart-series="PM2.5 (µg/m³)" checked> PM2.5</label>
+                                    <label><input type="checkbox" data-chart-series="PM10 (µg/m³)" checked> PM10</label>
+                                    <label><input type="checkbox" data-chart-series="eCO2 (ppm)" checked> eCO2</label>
+                                    <label><input type="checkbox" data-chart-series="TVOC (ppb)" checked> TVOC</label>
+                                </div>
+                            </details>
+                            <button id="btn-fullscreen-chart" class="chart-tool-button" type="button">
+                                <i class="fa-solid fa-expand"></i><span>Phóng to</span>
+                            </button>
+                            <button id="btn-export-excel"
+                                style="background: #10b981; color: white; border: none; padding: 0.6rem 1rem; border-radius: 0.5rem; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 0.5rem; transition: background 0.3s;"><i
+                                    class="fa-solid fa-file-excel"></i> Xuất Excel</button>
+                        </div>
                     </div>
                     <div class="chart-container">
                         <div id="history-chart" style="width: 100%; height: 100%;"></div>

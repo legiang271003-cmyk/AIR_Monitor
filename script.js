@@ -31,8 +31,8 @@ let isLoraConnected = false;
 
 // Cấu trúc mới hỗ trợ 2 trạm
 const stationsData = {
-    1: { name: 'Trạm 1 (LoRa)', history: { time: [], temp: [], hum: [], pm1_0: [], pm25: [], pm10: [], eco2: [], tvoc: [] }, current: {}, lastTime: Date.now(), timeoutAlerted: false },
-    2: { name: 'Trạm 2 (MQTT)', history: { time: [], temp: [], hum: [], pm1_0: [], pm25: [], pm10: [], eco2: [], tvoc: [] }, current: {}, lastTime: Date.now(), timeoutAlerted: false }
+    1: { name: 'Trạm 1 (LoRa)', history: { timestamp: [], time: [], temp: [], hum: [], pm1_0: [], pm25: [], pm10: [], eco2: [], tvoc: [] }, current: {}, lastTime: Date.now(), timeoutAlerted: false },
+    2: { name: 'Trạm 2 (MQTT)', history: { timestamp: [], time: [], temp: [], hum: [], pm1_0: [], pm25: [], pm10: [], eco2: [], tvoc: [] }, current: {}, lastTime: Date.now(), timeoutAlerted: false }
 };
 const STATION_LOCATIONS = {
     1: { name: 'Trạm 1 (LoRa) - UTT Hà Nội', latitude: 20.984701, longitude: 105.798850 },
@@ -40,24 +40,53 @@ const STATION_LOCATIONS = {
 };
 let activeStation = 1;
 let activeWeatherStation = 1;
-const MAX_DATA_POINTS = 30;
+const HISTORY_RETENTION_MS = 60 * 60 * 1000;
+const MAX_HISTORY_POINTS = 5000;
 const LORA_DUST_CORRECTION_FACTORS = {
     pm1_0: 4.2,   // 21 (LoRa) / 5 (MQTT)
     pm2_5: 5.83,  // 35 (LoRa) / 6 (MQTT)
     pm10: 13.67   // 82 (LoRa) / 6 (MQTT)
 };
 
-// --- AQI MAPPING ---
-// ENS160 trả về 1-5 (UBA Index). Chuyển sang EPA AQI (0-500)
-function mapENS160toEPA(ensAqi) {
-    switch (Math.round(ensAqi)) {
-        case 1: return { val: 25, label: 'Tuyệt vời', class: 'excellent' }; // 0-50
-        case 2: return { val: 75, label: 'Tốt', class: 'good' }; // 51-100
-        case 3: return { val: 125, label: 'Trung bình', class: 'moderate' }; // 101-150
-        case 4: return { val: 175, label: 'Kém', class: 'poor' }; // 151-200
-        case 5: return { val: 250, label: 'Độc hại', class: 'unhealthy' }; // 201-300+
-        default: return { val: 0, label: 'Không xác định', class: 'offline' };
-    }
+// --- US EPA AQI TỪ PM2.5 VÀ PM10 ---
+// PM2.5 dùng breakpoint EPA 2024; PM10 dùng breakpoint hiện hành.
+const AQI_BREAKPOINTS = {
+    pm25: [
+        [0.0, 9.0, 0, 50], [9.1, 35.4, 51, 100], [35.5, 55.4, 101, 150],
+        [55.5, 125.4, 151, 200], [125.5, 225.4, 201, 300],
+        [225.5, 325.4, 301, 400], [325.5, 500.4, 401, 500]
+    ],
+    pm10: [
+        [0, 54, 0, 50], [55, 154, 51, 100], [155, 254, 101, 150],
+        [255, 354, 151, 200], [355, 424, 201, 300],
+        [425, 504, 301, 400], [505, 604, 401, 500]
+    ]
+};
+
+function calculatePollutantAQI(concentration, breakpoints) {
+    if (!Number.isFinite(concentration) || concentration < 0) return 0;
+    const range = breakpoints.find(([low, high]) => concentration >= low && concentration <= high);
+    if (!range) return concentration > breakpoints.at(-1)[1] ? 500 : 0;
+    const [cLow, cHigh, iLow, iHigh] = range;
+    return Math.round(((iHigh - iLow) / (cHigh - cLow)) * (concentration - cLow) + iLow);
+}
+
+function getAQICategory(aqi) {
+    if (aqi <= 50) return { val: aqi, label: 'Tốt', class: 'aqi-good' };
+    if (aqi <= 100) return { val: aqi, label: 'Trung bình', class: 'aqi-moderate' };
+    if (aqi <= 150) return { val: aqi, label: 'Không tốt cho nhóm nhạy cảm', class: 'aqi-sensitive' };
+    if (aqi <= 200) return { val: aqi, label: 'Không tốt', class: 'aqi-unhealthy' };
+    if (aqi <= 300) return { val: aqi, label: 'Rất không tốt', class: 'aqi-very-unhealthy' };
+    return { val: Math.min(aqi, 500), label: 'Nguy hại', class: 'aqi-hazardous' };
+}
+
+function calculateAirQualityIndex(pm25Value, pm10Value) {
+    const pm25 = Math.floor(Math.max(0, Number(pm25Value) || 0) * 10) / 10;
+    const pm10 = Math.floor(Math.max(0, Number(pm10Value) || 0));
+    const pm25Aqi = calculatePollutantAQI(pm25, AQI_BREAKPOINTS.pm25);
+    const pm10Aqi = calculatePollutantAQI(pm10, AQI_BREAKPOINTS.pm10);
+    const dominantPollutant = pm25Aqi >= pm10Aqi ? 'PM2.5' : 'PM10';
+    return { ...getAQICategory(Math.max(pm25Aqi, pm10Aqi)), dominantPollutant };
 }
 
 // --- DOM ELEMENTS ---
@@ -414,7 +443,7 @@ updateAlarmButton();
 
 function checkThresholds(data, stationId) {
     const L = appConfig.limits;
-    const mappedAqi = mapENS160toEPA(data.aqi || 0).val;
+    const mappedAqi = data.aqi || 0;
     const candidates = [
         { active: data.temp > L.maxTemp, param: 'Nhiệt độ', value: data.temp, limit: L.maxTemp, message: 'Nhiệt độ QUÁ CAO', display: `${data.temp}°C > ${L.maxTemp}°C` },
         { active: data.temp < L.minTemp, param: 'Nhiệt độ', value: data.temp, limit: L.minTemp, message: 'Nhiệt độ QUÁ THẤP', display: `${data.temp}°C < ${L.minTemp}°C` },
@@ -423,7 +452,7 @@ function checkThresholds(data, stationId) {
         { active: data.pm2_5 > L.maxPm25, param: 'Bụi mịn PM2.5', value: data.pm2_5, limit: L.maxPm25, message: 'Bụi mịn PM2.5 vượt ngưỡng', display: `PM2.5 ${data.pm2_5} µg/m³` },
         { active: data.eco2 > L.maxEco2, param: 'eCO2', value: data.eco2, limit: L.maxEco2, message: 'Nồng độ eCO2 vượt ngưỡng', display: `eCO2 ${data.eco2} ppm` },
         { active: data.tvoc > L.maxTvoc, param: 'TVOC', value: data.tvoc, limit: L.maxTvoc, message: 'Nồng độ TVOC vượt ngưỡng', display: `TVOC ${data.tvoc} ppb` },
-        { active: mappedAqi > L.maxAqi, param: 'Chỉ số AQI', value: mappedAqi, limit: L.maxAqi, message: 'Chỉ số AQI ở mức nguy hiểm', display: `AQI ${mappedAqi}` }
+        { active: mappedAqi > L.maxAqi, param: 'Chỉ số AQI', value: mappedAqi, limit: L.maxAqi, message: 'Chỉ số AQI vượt ngưỡng', display: `AQI ${mappedAqi}` }
     ];
     const violations = candidates.filter(item => item.active);
     violations.forEach(item => {
@@ -478,6 +507,16 @@ chartPm25.setOption(getGaugeOption('PM2.5', 'µg/m³', 0, 200, 4, colorPm));
 chartPm10.setOption(getGaugeOption('PM10', 'µg/m³', 0, 200, 4, colorPm));
 
 const chartHistory = echarts.init(document.getElementById('history-chart'));
+const CHART_SERIES_NAMES = ['Nhiệt độ (°C)', 'Độ ẩm (%)', 'PM1.0 (µg/m³)', 'PM2.5 (µg/m³)', 'PM10 (µg/m³)', 'eCO2 (ppm)', 'TVOC (ppb)'];
+const CHART_FILTER_GROUPS = {
+    all: CHART_SERIES_NAMES,
+    environment: ['Nhiệt độ (°C)', 'Độ ẩm (%)'],
+    dust: ['PM1.0 (µg/m³)', 'PM2.5 (µg/m³)', 'PM10 (µg/m³)'],
+    gas: ['eCO2 (ppm)', 'TVOC (ppb)']
+};
+let chartTimeRangeMinutes = 5;
+let activeChartMetricGroup = 'all';
+
 chartHistory.setOption({
     tooltip: { trigger: 'axis' },
     legend: {
@@ -503,6 +542,105 @@ chartHistory.setOption({
     ]
 });
 
+function updateHistoryChart(history) {
+    const cutoffTime = Date.now() - chartTimeRangeMinutes * 60 * 1000;
+    const timestamps = history.timestamp || [];
+    const firstVisibleIndex = timestamps.findIndex(timestamp => timestamp >= cutoffTime);
+    const startIndex = firstVisibleIndex === -1 ? timestamps.length : firstVisibleIndex;
+    chartHistory.setOption({
+        xAxis: { data: history.time.slice(startIndex) },
+        series: [
+            { data: history.temp.slice(startIndex) },
+            { data: history.hum.slice(startIndex) },
+            { data: history.pm1_0.slice(startIndex) },
+            { data: history.pm25.slice(startIndex) },
+            { data: history.pm10.slice(startIndex) },
+            { data: history.eco2.slice(startIndex) },
+            { data: history.tvoc.slice(startIndex) }
+        ]
+    });
+}
+
+function syncSeriesCheckboxes(selected) {
+    document.querySelectorAll('[data-chart-series]').forEach(checkbox => {
+        checkbox.checked = selected[checkbox.dataset.chartSeries] !== false;
+    });
+}
+
+function updateChartAxes(selected) {
+    const showEnvironmentAxis = CHART_SERIES_NAMES.slice(0, 5).some(name => selected[name] !== false);
+    const showGasAxis = CHART_SERIES_NAMES.slice(5).some(name => selected[name] !== false);
+    chartHistory.setOption({
+        yAxis: [
+            { show: showEnvironmentAxis },
+            { show: showGasAxis }
+        ]
+    });
+}
+
+function applySeriesSelection(selected) {
+    chartHistory.setOption({ legend: { selected } });
+    updateChartAxes(selected);
+    syncSeriesCheckboxes(selected);
+}
+
+function applyChartMetricFilter(group) {
+    if (group === 'custom') return;
+    activeChartMetricGroup = CHART_FILTER_GROUPS[group] ? group : 'all';
+    const visibleSeries = CHART_FILTER_GROUPS[activeChartMetricGroup];
+    const selected = Object.fromEntries(CHART_SERIES_NAMES.map(name => [name, visibleSeries.includes(name)]));
+    applySeriesSelection(selected);
+}
+
+document.getElementById('chart-metric-filter')?.addEventListener('change', event => {
+    applyChartMetricFilter(event.target.value);
+});
+
+document.getElementById('chart-point-filter')?.addEventListener('change', event => {
+    chartTimeRangeMinutes = Number(event.target.value) || 5;
+    updateHistoryChart(stationsData[activeStation].history);
+});
+
+document.querySelectorAll('[data-chart-series]').forEach(checkbox => {
+    checkbox.addEventListener('change', () => {
+        const selected = Object.fromEntries(
+            [...document.querySelectorAll('[data-chart-series]')]
+                .map(input => [input.dataset.chartSeries, input.checked])
+        );
+        activeChartMetricGroup = 'custom';
+        document.getElementById('chart-metric-filter').value = 'custom';
+        applySeriesSelection(selected);
+    });
+});
+
+chartHistory.on('legendselectchanged', event => {
+    activeChartMetricGroup = 'custom';
+    document.getElementById('chart-metric-filter').value = 'custom';
+    updateChartAxes(event.selected);
+    syncSeriesCheckboxes(event.selected);
+});
+
+const fullscreenChartButton = document.getElementById('btn-fullscreen-chart');
+fullscreenChartButton?.addEventListener('click', async () => {
+    const chartSection = document.querySelector('.chart-section');
+    try {
+        if (document.fullscreenElement) await document.exitFullscreen();
+        else await chartSection.requestFullscreen();
+    } catch (error) {
+        console.error('Fullscreen error:', error);
+        showToast('Không thể phóng to', 'Trình duyệt không cho phép mở toàn màn hình.', 'error');
+    }
+});
+
+document.addEventListener('fullscreenchange', () => {
+    if (fullscreenChartButton) {
+        fullscreenChartButton.innerHTML = document.fullscreenElement
+            ? '<i class="fa-solid fa-compress"></i><span>Thu nhỏ</span>'
+            : '<i class="fa-solid fa-expand"></i><span>Phóng to</span>';
+    }
+    setTimeout(() => chartHistory.resize(), 100);
+});
+
 window.addEventListener('resize', () => {
     chartTemp.resize(); chartHum.resize(); chartEco2.resize(); chartTvoc.resize(); chartPm1_0.resize(); chartPm25.resize(); chartPm10.resize(); chartHistory.resize();
 });
@@ -510,14 +648,18 @@ window.addEventListener('resize', () => {
 // --- UPDATE LOGIC ---
 function normalizeStationData(data, stationId) {
     const normalizedData = { ...data };
-    if (stationId !== 1) return normalizedData;
+    if (stationId === 1) {
+        Object.entries(LORA_DUST_CORRECTION_FACTORS).forEach(([metric, correctionFactor]) => {
+            const rawValue = Number(normalizedData[metric]);
+            if (Number.isFinite(rawValue)) {
+                normalizedData[metric] = Math.round((rawValue / correctionFactor) * 10) / 10;
+            }
+        });
+    }
 
-    Object.entries(LORA_DUST_CORRECTION_FACTORS).forEach(([metric, correctionFactor]) => {
-        const rawValue = Number(normalizedData[metric]);
-        if (Number.isFinite(rawValue)) {
-            normalizedData[metric] = Math.round((rawValue / correctionFactor) * 10) / 10;
-        }
-    });
+    const aqiInfo = calculateAirQualityIndex(normalizedData.pm2_5, normalizedData.pm10);
+    normalizedData.aqi = aqiInfo.val;
+    normalizedData.aqiPollutant = aqiInfo.dominantPollutant;
 
     return normalizedData;
 }
@@ -528,10 +670,13 @@ function storeStationData(data, stationId) {
     st.current = data;
     st.lastTime = Date.now();
     st.timeoutAlerted = false;
+    updateStationFreshness(stationId);
 
-    const now = new Date();
+    const sampleTimestamp = Date.now();
+    const now = new Date(sampleTimestamp);
     const timeStr = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0') + ':' + now.getSeconds().toString().padStart(2, '0');
 
+    st.history.timestamp.push(sampleTimestamp);
     st.history.time.push(timeStr);
     st.history.temp.push(data.temp || 0);
     st.history.hum.push(data.hum || 0);
@@ -541,13 +686,14 @@ function storeStationData(data, stationId) {
     st.history.eco2.push(data.eco2 || 400);
     st.history.tvoc.push(data.tvoc || 0);
 
-    if (st.history.time.length > MAX_DATA_POINTS) {
-        st.history.time.shift(); st.history.temp.shift(); st.history.hum.shift(); st.history.pm1_0.shift(); st.history.pm25.shift(); st.history.pm10.shift(); st.history.eco2.shift(); st.history.tvoc.shift();
+    const historyExpired = () => st.history.timestamp[0] < sampleTimestamp - HISTORY_RETENTION_MS;
+    while (st.history.time.length > MAX_HISTORY_POINTS || historyExpired()) {
+        st.history.timestamp.shift(); st.history.time.shift(); st.history.temp.shift(); st.history.hum.shift(); st.history.pm1_0.shift(); st.history.pm25.shift(); st.history.pm10.shift(); st.history.eco2.shift(); st.history.tvoc.shift();
     }
 
     checkThresholds(data, stationId);
 
-    const aqiInfo = mapENS160toEPA(data.aqi || 0);
+    const aqiInfo = { ...getAQICategory(data.aqi || 0), dominantPollutant: data.aqiPollutant };
     if (typeof updateMapMarker === 'function') {
         updateMapMarker(stationId, aqiInfo, data);
     }
@@ -560,9 +706,9 @@ function storeStationData(data, stationId) {
 
 function updateDashboardUI(data, history) {
     try {
-        const aqiInfo = mapENS160toEPA(data.aqi || 0);
+        const aqiInfo = { ...getAQICategory(data.aqi || 0), dominantPollutant: data.aqiPollutant };
         valAqi.innerText = aqiInfo.val;
-        labelAqi.innerText = aqiInfo.label;
+        labelAqi.innerText = `${aqiInfo.label} · do ${aqiInfo.dominantPollutant}`;
         aqiBanner.className = 'aqi-banner ' + aqiInfo.class;
 
         chartTemp.setOption({ series: [{ data: [{ value: data.temp || 0, name: 'Nhiệt độ' }] }] });
@@ -573,18 +719,7 @@ function updateDashboardUI(data, history) {
         chartPm25.setOption({ series: [{ data: [{ value: data.pm2_5 || 0, name: 'PM2.5' }] }] });
         chartPm10.setOption({ series: [{ data: [{ value: data.pm10 || 0, name: 'PM10' }] }] });
 
-        chartHistory.setOption({
-            xAxis: { data: history.time },
-            series: [
-                { data: history.temp },
-                { data: history.hum },
-                { data: history.pm1_0 },
-                { data: history.pm25 },
-                { data: history.pm10 },
-                { data: history.eco2 },
-                { data: history.tvoc }
-            ]
-        });
+        updateHistoryChart(history);
     } catch (e) {
         console.error("Error updating UI", e);
     }
@@ -1002,6 +1137,21 @@ function updateConnectionStatusBadge() {
     }
 }
 
+function updateStationFreshness(stationId) {
+    const element = document.getElementById(`station-freshness-${stationId}`);
+    const station = stationsData[stationId];
+    if (!element || !station || Object.keys(station.current).length === 0) return;
+
+    const ageSeconds = Math.max(0, Math.floor((Date.now() - station.lastTime) / 1000));
+    if (station.timeoutAlerted || ageSeconds > 20) {
+        element.textContent = 'Mất tín hiệu';
+        element.dataset.state = 'offline';
+    } else {
+        element.textContent = ageSeconds < 3 ? 'Vừa cập nhật' : `${ageSeconds} giây trước`;
+        element.dataset.state = 'live';
+    }
+}
+
 // Kiểm tra mất dữ liệu quá 20s cho từng trạm
 setInterval(() => {
     const now = Date.now();
@@ -1028,6 +1178,8 @@ setInterval(() => {
         }
     }
 
+    updateStationFreshness(1);
+    updateStationFreshness(2);
     updateConnectionStatusBadge();
 }, 1000);
 

@@ -23,6 +23,12 @@
     --status-poor: #ff0000;
     --status-unhealthy: #7030a0;
     --status-offline: #a6a6a6;
+    --status-aqi-good: #00b050;
+    --status-aqi-moderate: #ffc000;
+    --status-aqi-sensitive: #f59e0b;
+    --status-aqi-unhealthy: #ef4444;
+    --status-aqi-very-unhealthy: #7030a0;
+    --status-aqi-hazardous: #7e0023;
     --gemini-green: #059669;
 }
 
@@ -271,6 +277,28 @@ header {
     box-shadow: 0 4px 15px rgba(0, 91, 181, 0.2);
 }
 
+.station-btn-content {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.2;
+}
+
+.station-freshness {
+    margin-top: 0.2rem;
+    font-size: 0.72rem;
+    font-weight: 500;
+    opacity: 0.78;
+}
+
+.station-freshness[data-state="offline"] {
+    color: var(--status-poor);
+    opacity: 1;
+}
+
+.station-btn.active .station-freshness[data-state="offline"] {
+    color: #fecaca;
+}
+
 .weather-station-selector {
     display: flex;
     gap: 0.75rem;
@@ -337,6 +365,30 @@ header {
     border-color: rgba(139, 92, 246, 0.4);
 }
 
+.aqi-banner.aqi-good {
+    background: linear-gradient(135deg, rgba(0, 176, 80, 0.82), rgba(0, 71, 46, 0.96));
+}
+
+.aqi-banner.aqi-moderate {
+    background: linear-gradient(135deg, rgba(255, 192, 0, 0.88), rgba(120, 79, 0, 0.96));
+}
+
+.aqi-banner.aqi-sensitive {
+    background: linear-gradient(135deg, rgba(245, 158, 11, 0.9), rgba(154, 52, 18, 0.96));
+}
+
+.aqi-banner.aqi-unhealthy {
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.9), rgba(127, 29, 29, 0.97));
+}
+
+.aqi-banner.aqi-very-unhealthy {
+    background: linear-gradient(135deg, rgba(112, 48, 160, 0.92), rgba(59, 7, 100, 0.98));
+}
+
+.aqi-banner.aqi-hazardous {
+    background: linear-gradient(135deg, rgba(126, 0, 35, 0.94), rgba(69, 10, 10, 0.99));
+}
+
 .aqi-info h2 {
     font-size: 1.2rem;
     color: rgba(255, 255, 255, 0.8);
@@ -375,6 +427,15 @@ header {
 
 .aqi-banner.unhealthy .aqi-label {
     color: var(--status-unhealthy);
+}
+
+.aqi-banner.aqi-good .aqi-label,
+.aqi-banner.aqi-moderate .aqi-label,
+.aqi-banner.aqi-sensitive .aqi-label,
+.aqi-banner.aqi-unhealthy .aqi-label,
+.aqi-banner.aqi-very-unhealthy .aqi-label,
+.aqi-banner.aqi-hazardous .aqi-label {
+    color: #fff;
 }
 
 .aqi-icon i {
@@ -654,6 +715,105 @@ header {
 
 .chart-header {
     margin-bottom: 1rem;
+}
+
+.chart-header-with-actions,
+.chart-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.chart-header-with-actions {
+    justify-content: space-between;
+    flex-wrap: wrap;
+}
+
+.chart-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.chart-filter {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    font-weight: 600;
+}
+
+.chart-filter select {
+    padding: 0.55rem 1.8rem 0.55rem 0.65rem;
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+    background: #fff;
+    color: var(--text-primary);
+    font: inherit;
+    cursor: pointer;
+}
+
+.series-picker {
+    position: relative;
+}
+
+.series-picker summary,
+.chart-tool-button {
+    min-height: 37px;
+    padding: 0.55rem 0.7rem;
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+    background: #fff;
+    color: var(--utt-blue);
+    font: inherit;
+    font-size: 0.82rem;
+    font-weight: 700;
+    cursor: pointer;
+    list-style: none;
+}
+
+.series-picker summary::-webkit-details-marker {
+    display: none;
+}
+
+.series-picker-menu {
+    position: absolute;
+    top: calc(100% + 0.4rem);
+    right: 0;
+    z-index: 100;
+    width: 180px;
+    padding: 0.6rem;
+    background: #fff;
+    border: 1px solid var(--card-border);
+    border-radius: 0.7rem;
+    box-shadow: 0 12px 30px rgba(15, 23, 42, 0.16);
+}
+
+.series-picker-menu label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem;
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+.series-picker-menu input {
+    accent-color: var(--utt-blue);
+}
+
+.chart-section:fullscreen {
+    width: 100%;
+    height: 100%;
+    padding: 2rem;
+    border-radius: 0;
+    background: var(--bg-color);
+    overflow: auto;
+}
+
+.chart-section:fullscreen .chart-container {
+    height: calc(100vh - 120px);
 }
 
 .chart-header h3 {
@@ -1065,6 +1225,24 @@ header {
     .weather-station-selector {
         display: grid;
         grid-template-columns: 1fr 1fr;
+    }
+
+    .chart-actions {
+        width: 100%;
+        justify-content: flex-start;
+    }
+
+    .chart-filter span {
+        display: none;
+    }
+
+    .chart-tool-button span {
+        display: none;
+    }
+
+    .series-picker-menu {
+        right: auto;
+        left: 0;
     }
 
     .alarm-toggle span {
