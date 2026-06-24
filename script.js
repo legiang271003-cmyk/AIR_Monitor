@@ -5,6 +5,7 @@ const DEFAULT_CONFIG = {
     mqttPass: SYS_CONFIG.MQTT_DEFAULT_PASS,
     mqttTopic: SYS_CONFIG.MQTT_DEFAULT_TOPIC,
     email: '',
+    alarmEnabled: false,
     geminiKey: SYS_CONFIG.GEMINI_API_KEY,
     limits: SYS_CONFIG.DEFAULT_LIMITS
 };
@@ -33,8 +34,18 @@ const stationsData = {
     1: { name: 'Trạm 1 (LoRa)', history: { time: [], temp: [], hum: [], pm1_0: [], pm25: [], pm10: [], eco2: [], tvoc: [] }, current: {}, lastTime: Date.now(), timeoutAlerted: false },
     2: { name: 'Trạm 2 (MQTT)', history: { time: [], temp: [], hum: [], pm1_0: [], pm25: [], pm10: [], eco2: [], tvoc: [] }, current: {}, lastTime: Date.now(), timeoutAlerted: false }
 };
+const STATION_LOCATIONS = {
+    1: { name: 'Trạm 1 (LoRa) - UTT Hà Nội', latitude: 20.984701, longitude: 105.798850 },
+    2: { name: 'Trạm 2 (MQTT)', latitude: 21.29229170656175, longitude: 105.58406173400247 }
+};
 let activeStation = 1;
+let activeWeatherStation = 1;
 const MAX_DATA_POINTS = 30;
+const LORA_DUST_CORRECTION_FACTORS = {
+    pm1_0: 4.2,   // 21 (LoRa) / 5 (MQTT)
+    pm2_5: 5.83,  // 35 (LoRa) / 6 (MQTT)
+    pm10: 13.67   // 82 (LoRa) / 6 (MQTT)
+};
 
 // --- AQI MAPPING ---
 // ENS160 trả về 1-5 (UBA Index). Chuyển sang EPA AQI (0-500)
@@ -66,6 +77,8 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 
         if (btn.dataset.target === 'dashboard-tab') {
             window.dispatchEvent(new Event('resize'));
+        } else if (btn.dataset.target === 'weather-tab') {
+            loadWeather(activeWeatherStation);
         }
     });
 });
@@ -85,6 +98,15 @@ document.querySelectorAll('.station-btn').forEach(btn => {
             labelAqi.innerText = 'Đang chờ dữ liệu...';
             aqiBanner.className = 'aqi-banner';
         }
+    });
+});
+
+document.querySelectorAll('.weather-station-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('.weather-station-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        activeWeatherStation = parseInt(btn.dataset.weatherStation);
+        loadWeather(activeWeatherStation);
     });
 });
 
@@ -234,18 +256,181 @@ function triggerEmailAlert(stationId, paramName, currentValue, limitValue, messa
     });
 }
 
+// --- WEB AUDIO ALARM ---
+const ALARM_SOUND_URL = 'https://actions.google.com/sounds/v1/emergency/emergency_siren_short_burst.ogg';
+let alarmAudio = null;
+let alarmAudioContext = null;
+let alarmTimerIds = [];
+let lastAlarmTime = {};
+const ALARM_COOLDOWN_MS = 60 * 1000;
+
+function updateAlarmButton() {
+    const button = document.getElementById('btn-toggle-alarm');
+    if (!button) return;
+    const enabled = Boolean(appConfig.alarmEnabled && (alarmAudio || alarmAudioContext));
+    button.classList.toggle('enabled', enabled);
+    button.setAttribute('aria-pressed', String(enabled));
+    if (enabled) {
+        button.innerHTML = '<i class="fa-solid fa-volume-high"></i><span>Âm cảnh báo đang bật</span>';
+    } else if (appConfig.alarmEnabled) {
+        button.innerHTML = '<i class="fa-solid fa-hand-pointer"></i><span>Chạm để kích hoạt âm</span>';
+    } else {
+        button.innerHTML = '<i class="fa-solid fa-volume-xmark"></i><span>Bật âm cảnh báo</span>';
+    }
+}
+
+async function enableAlarmSound(showConfirmation = true) {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+
+    if (!alarmAudio) {
+        alarmAudio = new Audio(ALARM_SOUND_URL);
+        alarmAudio.preload = 'auto';
+        alarmAudio.volume = 0.9;
+    }
+
+    if (AudioContextClass) {
+        if (!alarmAudioContext) alarmAudioContext = new AudioContextClass();
+        if (alarmAudioContext.state === 'suspended') await alarmAudioContext.resume();
+    }
+
+    // Mở khóa quyền phát media ngay trong thao tác bấm của người dùng.
+    try {
+        alarmAudio.muted = true;
+        await alarmAudio.play();
+        alarmAudio.pause();
+        alarmAudio.currentTime = 0;
+    } catch (error) {
+        console.warn('Không thể tải trước còi online, sẽ dùng âm dự phòng.', error);
+    } finally {
+        alarmAudio.muted = false;
+    }
+
+    appConfig.alarmEnabled = true;
+    saveConfig();
+    updateAlarmButton();
+    if (showConfirmation) showToast('Đã bật còi', 'Còi báo động khẩn cấp đã sẵn sàng.', 'success');
+    return true;
+}
+
+function silenceAlarm(disable = false) {
+    alarmTimerIds.forEach(id => clearTimeout(id));
+    alarmTimerIds = [];
+    if (alarmAudio) {
+        alarmAudio.pause();
+        alarmAudio.currentTime = 0;
+    }
+    if (disable) {
+        appConfig.alarmEnabled = false;
+        saveConfig();
+        updateAlarmButton();
+    }
+}
+
+function playFallbackAlarmPattern() {
+    [0, 350, 700, 1200, 1550, 1900].forEach((delay, index) => {
+        playAlarmTone(index % 2 === 0 ? 880 : 660, delay, 250);
+    });
+}
+
+function playOnlineAlarmClip(startDelay, useFallback = false) {
+    const timerId = setTimeout(async () => {
+        if (!appConfig.alarmEnabled || !alarmAudio) return;
+        try {
+            alarmAudio.pause();
+            alarmAudio.currentTime = 0;
+            await alarmAudio.play();
+        } catch (error) {
+            console.warn('Không thể phát còi online.', error);
+            if (useFallback && alarmAudioContext) playFallbackAlarmPattern();
+        }
+    }, startDelay);
+    alarmTimerIds.push(timerId);
+}
+
+function playAlarmTone(frequency, startDelay, duration) {
+    const timerId = setTimeout(() => {
+        if (!appConfig.alarmEnabled || !alarmAudioContext) return;
+        const oscillator = alarmAudioContext.createOscillator();
+        const gain = alarmAudioContext.createGain();
+        oscillator.type = 'square';
+        oscillator.frequency.setValueAtTime(frequency, alarmAudioContext.currentTime);
+        gain.gain.setValueAtTime(0.0001, alarmAudioContext.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.18, alarmAudioContext.currentTime + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, alarmAudioContext.currentTime + duration / 1000);
+        oscillator.connect(gain).connect(alarmAudioContext.destination);
+        oscillator.start();
+        oscillator.stop(alarmAudioContext.currentTime + duration / 1000 + 0.03);
+    }, startDelay);
+    alarmTimerIds.push(timerId);
+}
+
+function playAlarmPattern(stationId, force = false) {
+    const now = Date.now();
+    if (!force && lastAlarmTime[stationId] && now - lastAlarmTime[stationId] < ALARM_COOLDOWN_MS) return;
+    lastAlarmTime[stationId] = now;
+    if (!appConfig.alarmEnabled || (!alarmAudio && !alarmAudioContext)) return;
+    silenceAlarm(false);
+    if (alarmAudio) {
+        [0, 1800, 3600].forEach((delay, index) => playOnlineAlarmClip(delay, index === 0));
+    } else {
+        playFallbackAlarmPattern();
+    }
+}
+
+function showAirAlert(stationId, violations) {
+    const panel = document.getElementById('air-alert-panel');
+    document.getElementById('air-alert-title').textContent = `CẢNH BÁO TRẠM ${stationId}: ${violations.length} chỉ số vượt ngưỡng`;
+    document.getElementById('air-alert-message').textContent = violations.map(item => item.display).join(' · ');
+    panel.hidden = false;
+    playAlarmPattern(stationId);
+}
+
+document.getElementById('btn-toggle-alarm')?.addEventListener('click', async () => {
+    if (appConfig.alarmEnabled && (alarmAudio || alarmAudioContext)) {
+        silenceAlarm(true);
+        showToast('Đã tắt còi', 'Bạn vẫn nhận email và thông báo trên màn hình.', 'warning');
+    } else {
+        await enableAlarmSound();
+    }
+});
+
+document.getElementById('btn-test-alarm')?.addEventListener('click', async () => {
+    if (await enableAlarmSound(false)) {
+        playAlarmPattern('test', true);
+        showToast('Kiểm tra âm thanh', 'Đang phát mẫu còi cảnh báo.', 'warning');
+    }
+});
+
+document.getElementById('btn-silence-alarm')?.addEventListener('click', () => silenceAlarm(true));
+document.getElementById('btn-close-alert')?.addEventListener('click', () => {
+    document.getElementById('air-alert-panel').hidden = true;
+});
+// Trình duyệt chỉ cho tạo âm thanh sau một tương tác của người dùng.
+document.addEventListener('pointerdown', (event) => {
+    if (event.target.closest('#btn-toggle-alarm, #btn-test-alarm')) return;
+    if (appConfig.alarmEnabled && !alarmAudio && !alarmAudioContext) enableAlarmSound(false);
+}, { once: true });
+updateAlarmButton();
+
 function checkThresholds(data, stationId) {
     const L = appConfig.limits;
-    if (data.temp > L.maxTemp) { triggerEmailAlert(stationId, 'Nhiệt độ', data.temp, L.maxTemp, 'Nhiệt độ QUÁ CAO', data); triggerBrowserNotification(stationId, 'Nhiệt độ', `Nhiệt độ QUÁ CAO: ${data.temp}°C`); }
-    if (data.temp < L.minTemp) { triggerEmailAlert(stationId, 'Nhiệt độ', data.temp, L.minTemp, 'Nhiệt độ QUÁ THẤP', data); triggerBrowserNotification(stationId, 'Nhiệt độ', `Nhiệt độ QUÁ THẤP: ${data.temp}°C`); }
-    if (data.hum > L.maxHum) { triggerEmailAlert(stationId, 'Độ ẩm', data.hum, L.maxHum, 'Độ ẩm QUÁ CAO', data); triggerBrowserNotification(stationId, 'Độ ẩm', `Độ ẩm QUÁ CAO: ${data.hum}%`); }
-    if (data.hum < L.minHum) { triggerEmailAlert(stationId, 'Độ ẩm', data.hum, L.minHum, 'Độ ẩm QUÁ THẤP', data); triggerBrowserNotification(stationId, 'Độ ẩm', `Độ ẩm QUÁ THẤP: ${data.hum}%`); }
-    if (data.pm2_5 > L.maxPm25) { triggerEmailAlert(stationId, 'Bụi mịn PM2.5', data.pm2_5, L.maxPm25, 'Bụi mịn PM2.5 vượt ngưỡng', data); triggerBrowserNotification(stationId, 'PM2.5', `Bụi mịn PM2.5 vượt ngưỡng: ${data.pm2_5} µg/m³`); }
-    if (data.eco2 > L.maxEco2) { triggerEmailAlert(stationId, 'eCO2', data.eco2, L.maxEco2, 'Nồng độ CO2 vượt ngưỡng', data); triggerBrowserNotification(stationId, 'eCO2', `Nồng độ eCO2 vượt ngưỡng: ${data.eco2} ppm`); }
-    if (data.tvoc > L.maxTvoc) { triggerEmailAlert(stationId, 'TVOC', data.tvoc, L.maxTvoc, 'Nồng độ TVOC vượt ngưỡng', data); triggerBrowserNotification(stationId, 'TVOC', `Nồng độ TVOC vượt ngưỡng: ${data.tvoc} ppb`); }
-
     const mappedAqi = mapENS160toEPA(data.aqi || 0).val;
-    if (mappedAqi > L.maxAqi) { triggerEmailAlert(stationId, 'Chỉ số AQI', mappedAqi, L.maxAqi, 'Chỉ số AQI ở mức nguy hiểm', data); triggerBrowserNotification(stationId, 'AQI', `Chỉ số AQI nguy hiểm: ${mappedAqi}`); }
+    const candidates = [
+        { active: data.temp > L.maxTemp, param: 'Nhiệt độ', value: data.temp, limit: L.maxTemp, message: 'Nhiệt độ QUÁ CAO', display: `${data.temp}°C > ${L.maxTemp}°C` },
+        { active: data.temp < L.minTemp, param: 'Nhiệt độ', value: data.temp, limit: L.minTemp, message: 'Nhiệt độ QUÁ THẤP', display: `${data.temp}°C < ${L.minTemp}°C` },
+        { active: data.hum > L.maxHum, param: 'Độ ẩm', value: data.hum, limit: L.maxHum, message: 'Độ ẩm QUÁ CAO', display: `${data.hum}% > ${L.maxHum}%` },
+        { active: data.hum < L.minHum, param: 'Độ ẩm', value: data.hum, limit: L.minHum, message: 'Độ ẩm QUÁ THẤP', display: `${data.hum}% < ${L.minHum}%` },
+        { active: data.pm2_5 > L.maxPm25, param: 'Bụi mịn PM2.5', value: data.pm2_5, limit: L.maxPm25, message: 'Bụi mịn PM2.5 vượt ngưỡng', display: `PM2.5 ${data.pm2_5} µg/m³` },
+        { active: data.eco2 > L.maxEco2, param: 'eCO2', value: data.eco2, limit: L.maxEco2, message: 'Nồng độ eCO2 vượt ngưỡng', display: `eCO2 ${data.eco2} ppm` },
+        { active: data.tvoc > L.maxTvoc, param: 'TVOC', value: data.tvoc, limit: L.maxTvoc, message: 'Nồng độ TVOC vượt ngưỡng', display: `TVOC ${data.tvoc} ppb` },
+        { active: mappedAqi > L.maxAqi, param: 'Chỉ số AQI', value: mappedAqi, limit: L.maxAqi, message: 'Chỉ số AQI ở mức nguy hiểm', display: `AQI ${mappedAqi}` }
+    ];
+    const violations = candidates.filter(item => item.active);
+    violations.forEach(item => {
+        triggerEmailAlert(stationId, item.param, item.value, item.limit, item.message, data);
+        triggerBrowserNotification(stationId, item.param, `${item.message}: ${item.display}`);
+    });
+    if (violations.length) showAirAlert(stationId, violations);
 }
 
 
@@ -323,7 +508,22 @@ window.addEventListener('resize', () => {
 });
 
 // --- UPDATE LOGIC ---
+function normalizeStationData(data, stationId) {
+    const normalizedData = { ...data };
+    if (stationId !== 1) return normalizedData;
+
+    Object.entries(LORA_DUST_CORRECTION_FACTORS).forEach(([metric, correctionFactor]) => {
+        const rawValue = Number(normalizedData[metric]);
+        if (Number.isFinite(rawValue)) {
+            normalizedData[metric] = Math.round((rawValue / correctionFactor) * 10) / 10;
+        }
+    });
+
+    return normalizedData;
+}
+
 function storeStationData(data, stationId) {
+    data = normalizeStationData(data, stationId);
     const st = stationsData[stationId];
     st.current = data;
     st.lastTime = Date.now();
@@ -830,6 +1030,122 @@ setInterval(() => {
 
     updateConnectionStatusBadge();
 }, 1000);
+
+// ==========================================
+// KHÍ TƯỢNG THỦY VĂN - OPEN-METEO
+// ==========================================
+const weatherCache = {};
+const WEATHER_CACHE_MS = 10 * 60 * 1000;
+
+function getWeatherInfo(code, isDay = 1) {
+    const weatherCodes = {
+        0: [isDay ? '☀️' : '🌙', 'Trời quang'],
+        1: [isDay ? '🌤️' : '🌙', 'Ít mây'],
+        2: ['⛅', 'Mây rải rác'],
+        3: ['☁️', 'Nhiều mây'],
+        45: ['🌫️', 'Sương mù'], 48: ['🌫️', 'Sương mù đóng băng'],
+        51: ['🌦️', 'Mưa phùn nhẹ'], 53: ['🌦️', 'Mưa phùn'], 55: ['🌧️', 'Mưa phùn dày'],
+        56: ['🌧️', 'Mưa phùn lạnh'], 57: ['🌧️', 'Mưa phùn lạnh mạnh'],
+        61: ['🌦️', 'Mưa nhẹ'], 63: ['🌧️', 'Mưa vừa'], 65: ['🌧️', 'Mưa to'],
+        66: ['🌧️', 'Mưa lạnh'], 67: ['🌧️', 'Mưa lạnh mạnh'],
+        71: ['🌨️', 'Tuyết nhẹ'], 73: ['🌨️', 'Tuyết vừa'], 75: ['❄️', 'Tuyết dày'], 77: ['🌨️', 'Hạt tuyết'],
+        80: ['🌦️', 'Mưa rào nhẹ'], 81: ['🌧️', 'Mưa rào'], 82: ['⛈️', 'Mưa rào rất to'],
+        85: ['🌨️', 'Mưa tuyết nhẹ'], 86: ['🌨️', 'Mưa tuyết mạnh'],
+        95: ['⛈️', 'Dông'], 96: ['⛈️', 'Dông kèm mưa đá'], 99: ['⛈️', 'Dông mưa đá mạnh']
+    };
+    return weatherCodes[code] || ['🌡️', 'Chưa xác định'];
+}
+
+function buildWeatherAdvisory(data) {
+    const notes = [];
+    const todayRain = Number(data.daily.precipitation_sum[0] || 0);
+    const rainChance = Number(data.daily.precipitation_probability_max[0] || 0);
+    const maxUv = Number(data.daily.uv_index_max[0] || 0);
+    const gust = Number(data.daily.wind_gusts_10m_max[0] || 0);
+    if (todayRain >= 50) notes.push('⚠️ Nguy cơ mưa rất lớn/ngập cục bộ, cần theo dõi thoát nước và hạn chế đi qua vùng trũng.');
+    else if (todayRain >= 20) notes.push('🌧️ Có khả năng mưa lớn, nên chuẩn bị phương án che chắn và thoát nước.');
+    else if (rainChance >= 60) notes.push(`☔ Xác suất mưa hôm nay ${Math.round(rainChance)}%, nên mang theo áo mưa.`);
+    if (gust >= 50) notes.push(`💨 Gió giật có thể đạt ${Math.round(gust)} km/h, lưu ý vật dụng ngoài trời.`);
+    if (maxUv >= 8) notes.push(`🧴 UV rất cao (${maxUv.toFixed(1)}), hạn chế phơi nắng vào buổi trưa.`);
+    if (!notes.length) notes.push('✅ Điều kiện khí tượng hiện chưa có dấu hiệu nguy hiểm nổi bật.');
+    return notes.join(' ');
+}
+
+function renderWeather(data, stationId) {
+    const current = data.current;
+    const daily = data.daily;
+    const [icon, description] = getWeatherInfo(current.weather_code, current.is_day);
+    document.getElementById('weather-location').textContent = `${STATION_LOCATIONS[stationId].name} · cập nhật ${new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}`;
+    document.getElementById('weather-icon').textContent = icon;
+    document.getElementById('weather-temp').textContent = `${Math.round(current.temperature_2m)}°`;
+    document.getElementById('weather-description').textContent = description;
+    document.getElementById('weather-feels-like').textContent = `Cảm giác như ${Math.round(current.apparent_temperature)}°C`;
+    document.getElementById('weather-humidity').textContent = `${Math.round(current.relative_humidity_2m)}%`;
+    document.getElementById('weather-rain').textContent = `${Number(current.precipitation || 0).toFixed(1)} mm`;
+    document.getElementById('weather-wind').textContent = `${Math.round(current.wind_speed_10m)} km/h`;
+    document.getElementById('weather-pressure').textContent = `${Math.round(current.surface_pressure)} hPa`;
+    document.getElementById('weather-advisory').textContent = buildWeatherAdvisory(data);
+
+    const formatter = new Intl.DateTimeFormat('vi-VN', { weekday: 'short', day: '2-digit', month: '2-digit' });
+    document.getElementById('daily-forecast').innerHTML = daily.time.map((date, index) => {
+        const [dayIcon, dayDescription] = getWeatherInfo(daily.weather_code[index]);
+        const dayLabel = index === 0 ? 'Hôm nay' : formatter.format(new Date(`${date}T00:00:00`));
+        return `<article class="forecast-day ${index === 0 ? 'today' : ''}" title="${dayDescription}">
+            <strong>${dayLabel}</strong>
+            <span class="forecast-icon">${dayIcon}</span>
+            <div class="forecast-temps">${Math.round(daily.temperature_2m_max[index])}° <span class="forecast-low">/ ${Math.round(daily.temperature_2m_min[index])}°</span></div>
+            <small><i class="fa-solid fa-droplet"></i> ${Math.round(daily.precipitation_probability_max[index] || 0)}% · ${Number(daily.precipitation_sum[index] || 0).toFixed(1)} mm</small>
+        </article>`;
+    }).join('');
+
+    document.getElementById('weather-loading').hidden = true;
+    document.getElementById('weather-error').hidden = true;
+    document.getElementById('weather-content').hidden = false;
+}
+
+async function loadWeather(stationId = activeWeatherStation, force = false) {
+    const location = STATION_LOCATIONS[stationId];
+    const cached = weatherCache[stationId];
+    if (!force && cached && Date.now() - cached.time < WEATHER_CACHE_MS) {
+        renderWeather(cached.data, stationId);
+        return;
+    }
+
+    const loading = document.getElementById('weather-loading');
+    const error = document.getElementById('weather-error');
+    const content = document.getElementById('weather-content');
+    loading.hidden = false;
+    error.hidden = true;
+    if (!cached) content.hidden = true;
+
+    const params = new URLSearchParams({
+        latitude: location.latitude,
+        longitude: location.longitude,
+        current: 'temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,rain,weather_code,cloud_cover,surface_pressure,wind_speed_10m,wind_direction_10m,wind_gusts_10m',
+        daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_gusts_10m_max,uv_index_max,sunrise,sunset',
+        timezone: 'auto',
+        forecast_days: '7'
+    });
+
+    try {
+        const response = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        if (!data.current || !data.daily) throw new Error('Dữ liệu dự báo không đầy đủ');
+        weatherCache[stationId] = { time: Date.now(), data };
+        if (stationId === activeWeatherStation) renderWeather(data, stationId);
+    } catch (fetchError) {
+        console.error('Weather API error:', fetchError);
+        loading.hidden = true;
+        error.hidden = false;
+        error.innerHTML = '<i class="fa-solid fa-cloud-bolt"></i> Không thể tải dự báo. Vui lòng kiểm tra Internet rồi thử lại.';
+        if (cached) renderWeather(cached.data, stationId);
+    }
+}
+
+document.getElementById('btn-refresh-weather')?.addEventListener('click', () => loadWeather(activeWeatherStation, true));
+loadWeather(activeWeatherStation);
+setInterval(() => loadWeather(activeWeatherStation, true), 15 * 60 * 1000);
 
 // ==========================================
 // TÍNH NĂNG MỚI: BẢN ĐỒ VỊ TRÍ TRẠM (LEAFLET.JS)

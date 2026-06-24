@@ -20,7 +20,7 @@
     <!-- SheetJS for Excel Export -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 </head>
- 
+
 <body>
     <div class="dashboard-container">
         <header>
@@ -32,6 +32,11 @@
                 </div>
             </div>
             <div class="header-right">
+                <button id="btn-toggle-alarm" class="alarm-toggle" type="button" aria-pressed="false"
+                    title="Trình duyệt cần một lần bấm để cho phép phát âm thanh">
+                    <i class="fa-solid fa-volume-xmark"></i>
+                    <span>Bật âm cảnh báo</span>
+                </button>
                 <div class="status-badge" id="connection-status">
                     <span class="status-dot"></span>
                     <span class="status-text">Đang kết nối...</span>
@@ -43,6 +48,8 @@
         <div class="tabs-nav">
             <button class="tab-btn active" data-target="dashboard-tab"><i class="fa-solid fa-chart-pie"></i> Giám sát
                 (Dashboard)</button>
+            <button class="tab-btn" data-target="weather-tab"><i class="fa-solid fa-cloud-sun-rain"></i> Thời
+                tiết</button>
             <button class="tab-btn" data-target="settings-tab"><i class="fa-solid fa-gear"></i> Cấu hình & Cảnh
                 báo</button>
         </div>
@@ -56,7 +63,6 @@
                         1 (LoRa)</button>
                     <button class="station-btn" data-station="2"><i class="fa-solid fa-wifi"></i> Trạm 2 (MQTT)</button>
                 </div>
-
                 <div class="aqi-banner" id="aqi-banner">
                     <div class="aqi-info">
                         <h2>Chỉ số AQI (Tiêu chuẩn EPA)</h2>
@@ -66,6 +72,19 @@
                     <div class="aqi-icon">
                         <i class="fa-solid fa-shield-virus"></i>
                     </div>
+                </div>
+
+                <!-- Map Section -->
+                <div class="map-section"
+                    style="margin-bottom: 2rem; background: var(--card-bg); border-radius: 1.5rem; padding: 1.5rem; border: 1px solid var(--card-border); box-shadow: 0 4px 15px rgba(0, 0, 0, 0.03);">
+                    <div class="chart-header" style="margin-bottom: 1rem;">
+                        <h3
+                            style="font-size: 1.2rem; font-weight: 600; display: flex; align-items: center; gap: 0.75rem;">
+                            <i class="fa-solid fa-map-location-dot" style="color: var(--utt-blue-light);"></i> Bản đồ Vị
+                            trí Trạm (UTT)
+                        </h3>
+                    </div>
+                    <div id="station-map" style="height: 350px; width: 100%; border-radius: 1rem; z-index: 1;"></div>
                 </div>
 
                 <!-- AI ADVISORY BOX -->
@@ -92,18 +111,6 @@
                             </div>
                         </div>
                     </div>
-                </div>
-
-                <!-- Map Section -->
-                <div class="map-section"
-                    style="margin-bottom: 2rem; background: var(--card-bg); border-radius: 1.5rem; padding: 1.5rem; border: 1px solid var(--card-border); box-shadow: 0 4px 15px rgba(0, 0, 0, 0.03);">
-                    <div class="chart-header" style="margin-bottom: 1rem;">
-                        <h3
-                            style="font-size: 1.2rem; font-weight: 600; display: flex; align-items: center; gap: 0.75rem;">
-                            <i class="fa-solid fa-map-location-dot" style="color: var(--utt-blue-light);"></i> Bản đồ Vị
-                            trí Trạm (UTT)</h3>
-                    </div>
-                    <div id="station-map" style="height: 350px; width: 100%; border-radius: 1rem; z-index: 1;"></div>
                 </div>
 
                 <!-- Gauges Grid -->
@@ -144,6 +151,62 @@
                         <div id="history-chart" style="width: 100%; height: 100%;"></div>
                     </div>
                 </div>
+            </div>
+
+            <!-- WEATHER TAB -->
+            <div id="weather-tab" class="tab-pane">
+                <div class="weather-station-selector" aria-label="Chọn vị trí dự báo">
+                    <button class="weather-station-btn active" data-weather-station="1" type="button">
+                        <i class="fa-solid fa-tower-broadcast"></i> Trạm 1 (LoRa)
+                    </button>
+                    <button class="weather-station-btn" data-weather-station="2" type="button">
+                        <i class="fa-solid fa-wifi"></i> Trạm 2 (MQTT)
+                    </button>
+                </div>
+
+                <section class="weather-section" aria-labelledby="weather-title">
+                    <div class="weather-header">
+                        <div>
+                            <p class="section-eyebrow">OPEN-METEO · CẬP NHẬT TỰ ĐỘNG</p>
+                            <h2 id="weather-title"><i class="fa-solid fa-cloud-sun-rain"></i> Khí tượng thủy văn</h2>
+                            <p id="weather-location">Dự báo tại Trạm 1 (LoRa)</p>
+                        </div>
+                        <button id="btn-refresh-weather" class="weather-refresh" type="button">
+                            <i class="fa-solid fa-rotate"></i> Làm mới
+                        </button>
+                    </div>
+
+                    <div id="weather-loading" class="weather-state">
+                        <i class="fa-solid fa-circle-notch fa-spin"></i> Đang lấy dữ liệu dự báo...
+                    </div>
+                    <div id="weather-error" class="weather-state weather-error" hidden></div>
+                    <div id="weather-content" hidden>
+                        <div class="weather-current">
+                            <div class="weather-main">
+                                <span id="weather-icon" class="weather-main-icon">☀️</span>
+                                <div>
+                                    <div><strong id="weather-temp">--°</strong> <span id="weather-description">--</span>
+                                    </div>
+                                    <small id="weather-feels-like">Cảm giác như --°C</small>
+                                </div>
+                            </div>
+                            <div class="weather-metrics">
+                                <div><i class="fa-solid fa-droplet"></i><span>Độ ẩm</span><strong
+                                        id="weather-humidity">--%</strong></div>
+                                <div><i class="fa-solid fa-cloud-rain"></i><span>Lượng mưa</span><strong
+                                        id="weather-rain">-- mm</strong></div>
+                                <div><i class="fa-solid fa-wind"></i><span>Gió</span><strong id="weather-wind">--
+                                        km/h</strong></div>
+                                <div><i class="fa-solid fa-gauge-high"></i><span>Áp suất</span><strong
+                                        id="weather-pressure">-- hPa</strong></div>
+                            </div>
+                        </div>
+
+                        <div id="weather-advisory" class="weather-advisory"></div>
+                        <h3 class="forecast-heading"><i class="fa-solid fa-calendar-days"></i> Dự báo 7 ngày</h3>
+                        <div id="daily-forecast" class="daily-forecast"></div>
+                    </div>
+                </section>
             </div>
 
             <!-- SETTINGS TAB -->
@@ -227,7 +290,7 @@
                         </div>
 
                         <h4 class="sub-heading"><i class="fa-solid fa-triangle-exclamation"></i> Ngưỡng cảnh báo (Vượt
-                            ngưỡng sẽ gửi Email)</h4>
+                            ngưỡng sẽ gửi Email và phát còi trên web)</h4>
                         <div class="thresholds-grid">
                             <div class="form-group">
                                 <label>Nhiệt độ tối đa (°C)</label>
@@ -262,6 +325,15 @@
                                 <input type="number" id="cfg-max-aqi" value="100" min="0" max="500">
                             </div>
                         </div>
+                        <div class="alarm-setting">
+                            <div>
+                                <strong><i class="fa-solid fa-bell"></i> Còi cảnh báo trên web</strong>
+                                <p>Bấm nút để cấp quyền âm thanh; còi sẽ kêu khi bất kỳ chỉ số nào vượt ngưỡng.</p>
+                            </div>
+                            <button id="btn-test-alarm" class="btn-secondary" type="button">
+                                <i class="fa-solid fa-volume-high"></i> Bật & thử còi
+                            </button>
+                        </div>
                         <button class="btn-primary" id="btn-save-alerts"><i class="fa-solid fa-floppy-disk"></i> Lưu cấu
                             hình cảnh báo</button>
                     </div>
@@ -269,6 +341,16 @@
                 </div>
             </div>
         </main>
+    </div>
+
+    <div id="air-alert-panel" class="air-alert-panel" role="alert" aria-live="assertive" hidden>
+        <div class="air-alert-icon"><i class="fa-solid fa-triangle-exclamation"></i></div>
+        <div class="air-alert-content">
+            <strong id="air-alert-title">Cảnh báo vượt ngưỡng</strong>
+            <span id="air-alert-message"></span>
+        </div>
+        <button id="btn-silence-alarm" type="button"><i class="fa-solid fa-volume-xmark"></i> Tắt còi</button>
+        <button id="btn-close-alert" type="button" aria-label="Đóng cảnh báo"><i class="fa-solid fa-xmark"></i></button>
     </div>
 
     <div class="toast-container" id="toast-container"></div>
