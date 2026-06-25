@@ -30,6 +30,6 @@ const SYS_CONFIG = {
         maxPm25: 50,
         maxEco2: 1000,
         maxTvoc: 500,
-        maxAqi: 3
+        maxAqi: 100
     }
 };

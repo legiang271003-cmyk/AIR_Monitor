@@ -21,11 +21,18 @@ if (SYS_CONFIG.GEMINI_API_KEY && SYS_CONFIG.GEMINI_API_KEY !== savedConfig.gemin
 
 let appConfig = { ...DEFAULT_CONFIG, ...savedConfig };
 appConfig.limits = { ...DEFAULT_CONFIG.limits, ...(savedConfig.limits || {}) };
+if (!Number.isFinite(Number(appConfig.limits.maxAqi)) || Number(appConfig.limits.maxAqi) <= 5) {
+    appConfig.limits.maxAqi = DEFAULT_CONFIG.limits.maxAqi;
+}
 localStorage.setItem('utt_air_config', JSON.stringify(appConfig));
 
 // --- CÁC BIẾN TRẠNG THÁI ---
 let mqttClient = null;
+const webClientId = 'web-client-' + Math.random().toString(16).slice(2, 10);
 let lastEmailSentTime = {};
+let lastEmailFailureTime = {};
+let emailSendQueue = Promise.resolve();
+const pendingEmailAlerts = new Set();
 let isMqttConnected = false;
 let isLoraConnected = false;
 
@@ -47,6 +54,23 @@ const LORA_DUST_CORRECTION_FACTORS = {
     pm2_5: 5.83,  // 35 (LoRa) / 6 (MQTT)
     pm10: 13.67   // 82 (LoRa) / 6 (MQTT)
 };
+function getLoRaMqttTopic() {
+    return `${appConfig.mqttTopic.replace(/\/$/, '')}/lora`;
+}
+
+function updateLoRaGatewayInfo() {
+    const topicText = document.getElementById('lora-topic-text');
+    const roleText = document.getElementById('lora-role-text');
+    if (topicText) topicText.textContent = getLoRaMqttTopic();
+    if (roleText) roleText.textContent = isLoraConnected ? 'Gateway USB Serial' : 'Viewer MQTT';
+}
+
+function setLoRaPublishStatus(message, color = 'var(--text-secondary)') {
+    const status = document.getElementById('lora-publish-status');
+    if (!status) return;
+    status.textContent = message;
+    status.style.color = color;
+}
 
 // --- US EPA AQI TỪ PM2.5 VÀ PM10 ---
 // PM2.5 dùng breakpoint EPA 2024; PM10 dùng breakpoint hiện hành.
@@ -122,10 +146,14 @@ document.querySelectorAll('.station-btn').forEach(btn => {
         const stData = stationsData[activeStation];
         if (stData.current.aqi !== undefined) {
             updateDashboardUI(stData.current, stData.history);
+            analyzeAIAdvice();
         } else {
             valAqi.innerText = '--';
             labelAqi.innerText = 'Đang chờ dữ liệu...';
             aqiBanner.className = 'aqi-banner';
+            resetGauges();
+            updateHistoryChart(stData.history);
+            resetAIAdvice();
         }
     });
 });
@@ -145,6 +173,7 @@ function initConfigForms() {
     document.getElementById('cfg-mqtt-user').value = appConfig.mqttUser;
     document.getElementById('cfg-mqtt-pass').value = appConfig.mqttPass;
     document.getElementById('cfg-mqtt-topic').value = appConfig.mqttTopic;
+    updateLoRaGatewayInfo();
 
     if (document.getElementById('cfg-gemini-key')) {
         document.getElementById('cfg-gemini-key').value = appConfig.geminiKey || '';
@@ -173,6 +202,7 @@ document.getElementById('btn-save-mqtt').addEventListener('click', () => {
     appConfig.mqttUser = document.getElementById('cfg-mqtt-user').value;
     appConfig.mqttPass = document.getElementById('cfg-mqtt-pass').value;
     appConfig.mqttTopic = document.getElementById('cfg-mqtt-topic').value;
+    updateLoRaGatewayInfo();
     saveConfig();
     showToast('Thành công', 'Đã lưu cấu hình MQTT. Đang kết nối...', 'success');
     if (mqttClient) {
@@ -187,7 +217,13 @@ document.getElementById('btn-save-alerts').addEventListener('click', () => {
     const e2 = document.getElementById('cfg-email-2').value.trim();
     const e3 = document.getElementById('cfg-email-3').value.trim();
     // Gộp lại thành chuỗi cách nhau bởi dấu phẩy, loại bỏ ô trống
-    const emailStr = [e1, e2, e3].filter(e => e !== '').join(', ');
+    const emails = [e1, e2, e3].filter(e => e !== '');
+    const invalidEmails = emails.filter(email => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email));
+    if (invalidEmails.length) {
+        showToast('Email chưa hợp lệ', `Kiểm tra lại: ${invalidEmails.join(', ')}`, 'error');
+        return;
+    }
+    const emailStr = emails.join(', ');
 
     appConfig.email = emailStr;
     appConfig.limits.maxTemp = parseFloat(document.getElementById('cfg-max-temp').value);
@@ -243,28 +279,51 @@ function showToast(title, message, type = 'info') {
 // --- EMAIL ALERT LOGIC ---
 // EmailJS Initialization
 (function () {
-    emailjs.init(SYS_CONFIG.EMAILJS_PUBLIC_KEY);
+    emailjs.init({
+        publicKey: SYS_CONFIG.EMAILJS_PUBLIC_KEY
+    });
 })();
 
 
+function getAlertEmails() {
+    return (appConfig.email || '')
+        .split(',')
+        .map(email => email.trim())
+        .filter(Boolean);
+}
+
+function queueEmailSend(task) {
+    emailSendQueue = emailSendQueue
+        .catch(() => { })
+        .then(() => new Promise(resolve => setTimeout(resolve, 1200)))
+        .then(task);
+    return emailSendQueue;
+}
+
 function triggerEmailAlert(stationId, paramName, currentValue, limitValue, message, fullData) {
-    if (!appConfig.email) return;
+    const alertEmails = getAlertEmails();
+    if (!alertEmails.length) return;
 
     const now = Date.now();
     const alertKey = `${stationId}_${paramName}`;
+    if (pendingEmailAlerts.has(alertKey)) return;
+
+    if (lastEmailFailureTime[alertKey] && (now - lastEmailFailureTime[alertKey] < 60 * 1000)) {
+        return;
+    }
+
     // Check cooldown
     if (lastEmailSentTime[alertKey] && (now - lastEmailSentTime[alertKey] < SYS_CONFIG.EMAIL_COOLDOWN_MS)) {
         return; // Skip if in cooldown
     }
 
-    lastEmailSentTime[alertKey] = now;
+    pendingEmailAlerts.add(alertKey);
     const emailMsg = `CẢNH BÁO [Trạm ${stationId}]: ${message}. Giá trị hiện tại: ${currentValue}, Giới hạn: ${limitValue}.`;
 
-    showToast('Gửi Email Cảnh báo', `Đang gửi email tới ${appConfig.email}...`, 'warning');
-    console.log("SENDING EMAIL to " + appConfig.email + " -> " + emailMsg);
+    showToast('Gửi Email Cảnh báo', `Đang gửi email tới ${alertEmails.join(', ')}...`, 'warning');
+    console.log("SENDING EMAIL to " + alertEmails.join(', ') + " -> " + emailMsg);
 
-    emailjs.send(SYS_CONFIG.EMAILJS_SERVICE_ID, SYS_CONFIG.EMAILJS_TEMPLATE_ID, {
-        to_email: appConfig.email,
+    const templateParams = {
         alert_message: `[Trạm ${stationId}] ${message}`,
         param_name: paramName,
         current_value: currentValue,
@@ -278,10 +337,29 @@ function triggerEmailAlert(stationId, paramName, currentValue, limitValue, messa
         val_tvoc: fullData.tvoc,
         val_aqi: fullData.aqi,
         time: new Date().toLocaleString('vi-VN')
-    }).then(() => {
-        showToast('Thành công', `Đã gửi email cảnh báo (Trạm ${stationId})!`, 'success');
-    }).catch(err => {
-        console.error("EmailJS Error:", err);
+    };
+
+    Promise.allSettled(alertEmails.map(email => queueEmailSend(() => (
+        emailjs.send(SYS_CONFIG.EMAILJS_SERVICE_ID, SYS_CONFIG.EMAILJS_TEMPLATE_ID, {
+            ...templateParams,
+            to_email: email
+        })
+    )))).then(results => {
+        const successCount = results.filter(result => result.status === 'fulfilled').length;
+        if (successCount > 0) {
+            lastEmailSentTime[alertKey] = Date.now();
+            showToast('Thành công', `Đã gửi ${successCount}/${alertEmails.length} email cảnh báo (Trạm ${stationId})!`, 'success');
+        }
+        if (successCount < alertEmails.length) {
+            const errors = results
+                .filter(result => result.status === 'rejected')
+                .map(result => result.reason);
+            console.error("EmailJS Error:", errors);
+            lastEmailFailureTime[alertKey] = Date.now();
+            showToast('Lỗi EmailJS', 'EmailJS đang từ chối hoặc giới hạn gửi. Sẽ thử lại sau 60 giây.', 'error');
+        }
+    }).finally(() => {
+        pendingEmailAlerts.delete(alertKey);
     });
 }
 
@@ -456,10 +534,20 @@ function checkThresholds(data, stationId) {
     ];
     const violations = candidates.filter(item => item.active);
     violations.forEach(item => {
-        triggerEmailAlert(stationId, item.param, item.value, item.limit, item.message, data);
         triggerBrowserNotification(stationId, item.param, `${item.message}: ${item.display}`);
     });
-    if (violations.length) showAirAlert(stationId, violations);
+    if (violations.length) {
+        const summaryMessage = violations.map(item => `${item.message}: ${item.display}`).join(' | ');
+        triggerEmailAlert(
+            stationId,
+            'Tổng hợp cảnh báo',
+            violations.map(item => item.display).join(' | '),
+            'Theo cấu hình',
+            summaryMessage,
+            data
+        );
+        showAirAlert(stationId, violations);
+    }
 }
 
 
@@ -550,15 +638,15 @@ function updateHistoryChart(history) {
     chartHistory.setOption({
         xAxis: { data: history.time.slice(startIndex) },
         series: [
-            { data: history.temp.slice(startIndex) },
-            { data: history.hum.slice(startIndex) },
-            { data: history.pm1_0.slice(startIndex) },
-            { data: history.pm25.slice(startIndex) },
-            { data: history.pm10.slice(startIndex) },
-            { data: history.eco2.slice(startIndex) },
-            { data: history.tvoc.slice(startIndex) }
+            { name: 'Nhiệt độ (°C)', type: 'line', smooth: true, itemStyle: { color: '#ef4444' }, data: history.temp.slice(startIndex) },
+            { name: 'Độ ẩm (%)', type: 'line', smooth: true, itemStyle: { color: '#3388dd' }, data: history.hum.slice(startIndex) },
+            { name: 'PM1.0 (µg/m³)', type: 'line', smooth: true, itemStyle: { color: '#10b981' }, data: history.pm1_0.slice(startIndex) },
+            { name: 'PM2.5 (µg/m³)', type: 'line', smooth: true, itemStyle: { color: '#f59e0b' }, data: history.pm25.slice(startIndex) },
+            { name: 'PM10 (µg/m³)', type: 'line', smooth: true, itemStyle: { color: '#8b5cf6' }, data: history.pm10.slice(startIndex) },
+            { name: 'eCO2 (ppm)', type: 'line', smooth: true, yAxisIndex: 1, itemStyle: { color: '#64748b' }, data: history.eco2.slice(startIndex) },
+            { name: 'TVOC (ppb)', type: 'line', smooth: true, yAxisIndex: 1, itemStyle: { color: '#ec4899' }, data: history.tvoc.slice(startIndex) }
         ]
-    });
+    }, { replaceMerge: ['series'] });
 }
 
 function syncSeriesCheckboxes(selected) {
@@ -646,9 +734,32 @@ window.addEventListener('resize', () => {
 });
 
 // --- UPDATE LOGIC ---
+function toFiniteNumber(value, fallback = 0) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : fallback;
+}
+
+function pickNumber(data, keys, fallback = 0) {
+    for (const key of keys) {
+        if (data[key] !== undefined && data[key] !== null && data[key] !== '') {
+            return toFiniteNumber(data[key], fallback);
+        }
+    }
+    return fallback;
+}
+
 function normalizeStationData(data, stationId) {
-    const normalizedData = { ...data };
-    if (stationId === 1) {
+    const normalizedData = {
+        ...data,
+        temp: pickNumber(data, ['temp', 'temperature', 'nhietdo']),
+        hum: pickNumber(data, ['hum', 'humidity', 'doam']),
+        pm1_0: pickNumber(data, ['pm1_0', 'pm1', 'pm01']),
+        pm2_5: pickNumber(data, ['pm2_5', 'pm25', 'pm2.5']),
+        pm10: pickNumber(data, ['pm10']),
+        eco2: pickNumber(data, ['eco2', 'eCO2', 'co2'], 400),
+        tvoc: pickNumber(data, ['tvoc', 'TVOC'])
+    };
+    if (stationId === 1 && !data._normalized) {
         Object.entries(LORA_DUST_CORRECTION_FACTORS).forEach(([metric, correctionFactor]) => {
             const rawValue = Number(normalizedData[metric]);
             if (Number.isFinite(rawValue)) {
@@ -664,15 +775,40 @@ function normalizeStationData(data, stationId) {
     return normalizedData;
 }
 
-function storeStationData(data, stationId) {
+function publishLoRaData(data) {
+    if (!mqttClient || !isMqttConnected) {
+        setLoRaPublishStatus('Đã đọc USB Serial, nhưng MQTT chưa kết nối nên máy khác chưa xem được.', 'var(--status-moderate)');
+        return;
+    }
+    const payload = {
+        ...data,
+        _stationId: 1,
+        _source: webClientId,
+        _normalized: true,
+        _publishedAt: Date.now()
+    };
+    mqttClient.publish(getLoRaMqttTopic(), JSON.stringify(payload), { qos: 0, retain: true }, error => {
+        if (error) {
+            console.error('Không thể đẩy dữ liệu LoRa lên MQTT:', error);
+            setLoRaPublishStatus('Lỗi đẩy dữ liệu LoRa lên MQTT. Kiểm tra broker/topic.', 'var(--status-offline)');
+            return;
+        }
+        setLoRaPublishStatus(`Gateway đã đẩy lên MQTT lúc ${new Date(payload._publishedAt).toLocaleTimeString('vi-VN')}`, 'var(--status-excellent)');
+    });
+}
+
+function storeStationData(data, stationId, options = {}) {
     data = normalizeStationData(data, stationId);
     const st = stationsData[stationId];
+    const sourceTimestamp = Number(data._publishedAt || data.timestamp || data.timeMs);
+    const sampleTimestamp = options.source === 'mqtt' && Number.isFinite(sourceTimestamp)
+        ? sourceTimestamp
+        : Date.now();
     st.current = data;
-    st.lastTime = Date.now();
+    st.lastTime = sampleTimestamp;
     st.timeoutAlerted = false;
     updateStationFreshness(stationId);
 
-    const sampleTimestamp = Date.now();
     const now = new Date(sampleTimestamp);
     const timeStr = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0') + ':' + now.getSeconds().toString().padStart(2, '0');
 
@@ -702,6 +838,31 @@ function storeStationData(data, stationId) {
         updateDashboardUI(data, st.history);
         analyzeAIAdvice();
     }
+
+    if (stationId === 1 && options.source !== 'mqtt') {
+        publishLoRaData(data);
+    }
+}
+
+function resetAIAdvice() {
+    const aiText = document.getElementById('ai-advice-text');
+    const aiBox = document.getElementById('ai-advisory-box');
+    if (aiText) aiText.innerHTML = 'Đang chờ đủ dữ liệu để phân tích xu hướng.';
+    if (aiBox) {
+        aiBox.style.background = 'linear-gradient(135deg, #ffffff, #f8fafc)';
+        aiBox.style.borderColor = 'var(--card-border)';
+        aiBox.style.boxShadow = '0 4px 15px rgba(0,0,0,0.03)';
+    }
+}
+
+function resetGauges() {
+    chartTemp.setOption({ series: [{ data: [{ value: 0, name: 'Nhiệt độ' }] }] });
+    chartHum.setOption({ series: [{ data: [{ value: 0, name: 'Độ ẩm' }] }] });
+    chartEco2.setOption({ series: [{ data: [{ value: 400, name: 'eCO2' }] }] });
+    chartTvoc.setOption({ series: [{ data: [{ value: 0, name: 'TVOC' }] }] });
+    chartPm1_0.setOption({ series: [{ data: [{ value: 0, name: 'PM1.0' }] }] });
+    chartPm25.setOption({ series: [{ data: [{ value: 0, name: 'PM2.5' }] }] });
+    chartPm10.setOption({ series: [{ data: [{ value: 0, name: 'PM10' }] }] });
 }
 
 function updateDashboardUI(data, history) {
@@ -711,13 +872,13 @@ function updateDashboardUI(data, history) {
         labelAqi.innerText = `${aqiInfo.label} · do ${aqiInfo.dominantPollutant}`;
         aqiBanner.className = 'aqi-banner ' + aqiInfo.class;
 
-        chartTemp.setOption({ series: [{ data: [{ value: data.temp || 0, name: 'Nhiệt độ' }] }] });
-        chartHum.setOption({ series: [{ data: [{ value: data.hum || 0, name: 'Độ ẩm' }] }] });
-        chartEco2.setOption({ series: [{ data: [{ value: data.eco2 || 0, name: 'eCO2' }] }] });
-        chartTvoc.setOption({ series: [{ data: [{ value: data.tvoc || 0, name: 'TVOC' }] }] });
-        chartPm1_0.setOption({ series: [{ data: [{ value: data.pm1_0 || 0, name: 'PM1.0' }] }] });
-        chartPm25.setOption({ series: [{ data: [{ value: data.pm2_5 || 0, name: 'PM2.5' }] }] });
-        chartPm10.setOption({ series: [{ data: [{ value: data.pm10 || 0, name: 'PM10' }] }] });
+        chartTemp.setOption({ series: [{ name: 'Nhiệt độ', data: [{ value: data.temp || 0, name: 'Nhiệt độ' }] }] });
+        chartHum.setOption({ series: [{ name: 'Độ ẩm', data: [{ value: data.hum || 0, name: 'Độ ẩm' }] }] });
+        chartEco2.setOption({ series: [{ name: 'eCO2', data: [{ value: data.eco2 || 0, name: 'eCO2' }] }] });
+        chartTvoc.setOption({ series: [{ name: 'TVOC', data: [{ value: data.tvoc || 0, name: 'TVOC' }] }] });
+        chartPm1_0.setOption({ series: [{ name: 'PM1.0', data: [{ value: data.pm1_0 || 0, name: 'PM1.0' }] }] });
+        chartPm25.setOption({ series: [{ name: 'PM2.5', data: [{ value: data.pm2_5 || 0, name: 'PM2.5' }] }] });
+        chartPm10.setOption({ series: [{ name: 'PM10', data: [{ value: data.pm10 || 0, name: 'PM10' }] }] });
 
         updateHistoryChart(history);
     } catch (e) {
@@ -745,7 +906,11 @@ function analyzeAIAdvice() {
     const aiBox = document.getElementById('ai-advisory-box');
     const hist = stationsData[activeStation].history;
 
-    if (!aiText || hist.pm25.length < 10) return; // Cần ít nhất 10 mẫu để phân tích
+    if (!aiText) return;
+    if (hist.pm25.length < 10) {
+        resetAIAdvice();
+        return;
+    } // Cần ít nhất 10 mẫu để phân tích
 
     // Lấy 10 điểm dữ liệu gần nhất để hồi quy tuyến tính
     const len = hist.pm25.length;
@@ -883,7 +1048,6 @@ Trả lời: Chuyên sâu, súc tích, trình bày rõ ràng, có dùng emoji.`;
         const result = await response.json();
 
         if (!response.ok) {
-            // Nếu vẫn 400, log này sẽ chỉ chính xác nguyên nhân
             console.error("Lỗi hệ thống:", result);
             throw new Error(result.error?.message || "Yêu cầu không hợp lệ");
         }
@@ -917,7 +1081,7 @@ function connectMQTT() {
     mqttClient = mqtt.connect(appConfig.mqttUrl, {
         username: appConfig.mqttUser,
         password: appConfig.mqttPass,
-        clientId: 'web-client-' + Math.random().toString(16).substr(2, 8),
+        clientId: webClientId,
         reconnectPeriod: 5000,
     });
 
@@ -926,28 +1090,54 @@ function connectMQTT() {
         isMqttConnected = true;
         document.getElementById('btn-save-mqtt').style.display = 'none';
         document.getElementById('btn-disconnect-mqtt').style.display = 'flex';
+        updateLoRaGatewayInfo();
+        if (!isLoraConnected) {
+            setLoRaPublishStatus(`Viewer đang nghe dữ liệu LoRa tại ${getLoRaMqttTopic()}`, 'var(--status-excellent)');
+        }
         updateConnectionStatusBadge();
 
-        mqttClient.subscribe(appConfig.mqttTopic, (err) => {
-            if (!err) console.log(`Subscribed to ${appConfig.mqttTopic}`);
+        const topics = [appConfig.mqttTopic, getLoRaMqttTopic()];
+        mqttClient.subscribe(topics, (err) => {
+            if (!err) console.log(`Subscribed to ${topics.join(', ')}`);
         });
     });
 
     mqttClient.on('message', (topic, message) => {
         const payload = message.toString();
         try {
-            storeStationData(JSON.parse(payload), 2); // Trạm 2 là MQTT
-        } catch (e) { }
+            const parsedData = JSON.parse(payload);
+            if (topic === getLoRaMqttTopic()) {
+                console.debug('Nhận dữ liệu LoRa qua MQTT:', parsedData);
+                setLoRaPublishStatus(`Viewer nhận LoRa qua MQTT lúc ${new Date(parsedData._publishedAt || Date.now()).toLocaleTimeString('vi-VN')}`, 'var(--status-excellent)');
+                storeStationData(parsedData, 1, { source: 'mqtt' }); // Trạm 1 LoRa từ gateway MQTT
+                return;
+            }
+            if (topic === appConfig.mqttTopic) {
+                const mqttStationId = Number(parsedData._stationId || parsedData.stationId || parsedData.station);
+                const sourceName = String(parsedData._source || parsedData.source || '').toLowerCase();
+                if (mqttStationId === 1 || sourceName.includes('lora')) {
+                    console.debug('Nhận dữ liệu LoRa qua MQTT topic chính:', parsedData);
+                    setLoRaPublishStatus(`Viewer nhận LoRa qua MQTT lúc ${new Date(parsedData._publishedAt || Date.now()).toLocaleTimeString('vi-VN')}`, 'var(--status-excellent)');
+                    storeStationData(parsedData, 1, { source: 'mqtt' });
+                    return;
+                }
+                storeStationData(parsedData, 2); // Trạm 2 là MQTT
+            }
+        } catch (e) {
+            console.warn('Bỏ qua MQTT payload không hợp lệ:', payload, e);
+        }
     });
 
     mqttClient.on('error', (err) => {
         console.error('MQTT Error:', err);
         isMqttConnected = false;
+        if (isLoraConnected) setLoRaPublishStatus('Gateway LoRa đang đọc COM nhưng mất kết nối MQTT.', 'var(--status-offline)');
         updateConnectionStatusBadge();
     });
 
     mqttClient.on('close', () => {
         isMqttConnected = false;
+        if (isLoraConnected) setLoRaPublishStatus('Gateway LoRa đang đọc COM nhưng MQTT đã ngắt.', 'var(--status-offline)');
         updateConnectionStatusBadge();
     });
 }
@@ -960,6 +1150,8 @@ function disconnectMQTT() {
     isMqttConnected = false;
     document.getElementById('btn-save-mqtt').style.display = 'flex';
     document.getElementById('btn-disconnect-mqtt').style.display = 'none';
+    if (isLoraConnected) setLoRaPublishStatus('Gateway LoRa đang đọc COM nhưng MQTT đã ngắt.', 'var(--status-offline)');
+    else setLoRaPublishStatus('Viewer chưa kết nối MQTT nên chưa nhận được LoRa.', 'var(--status-offline)');
     updateConnectionStatusBadge();
     showToast('Đã ngắt', 'Đã ngắt kết nối MQTT', 'warning');
 }
@@ -1002,6 +1194,13 @@ async function connectLoRa() {
         showToast('Thành công', 'Đã kết nối bộ thu LoRa', 'success');
 
         isLoraConnected = true;
+        updateLoRaGatewayInfo();
+        setLoRaPublishStatus(
+            isMqttConnected
+                ? `Gateway sẵn sàng đẩy Trạm 1 lên ${getLoRaMqttTopic()}`
+                : 'Gateway đã mở COM, đang chờ MQTT để máy khác xem được.',
+            isMqttConnected ? 'var(--status-excellent)' : 'var(--status-moderate)'
+        );
         updateConnectionStatusBadge();
 
         readSerialLoop();
@@ -1041,6 +1240,13 @@ async function disconnectLoRa() {
         document.getElementById('btn-disconnect-lora').style.display = 'none';
 
         isLoraConnected = false;
+        updateLoRaGatewayInfo();
+        setLoRaPublishStatus(
+            isMqttConnected
+                ? `Viewer đang nghe dữ liệu LoRa tại ${getLoRaMqttTopic()}`
+                : 'Viewer chưa kết nối MQTT nên chưa nhận được LoRa.',
+            isMqttConnected ? 'var(--status-excellent)' : 'var(--status-offline)'
+        );
         updateConnectionStatusBadge();
         showToast('Đã ngắt', 'Đã đóng cổng COM an toàn', 'warning');
 
@@ -1054,6 +1260,60 @@ async function readSerialLoop() {
     keepReading = true;
     const PACKET_SIZE = 16;
     let buffer = new Uint8Array(0);
+    let serialMode = null;
+    let jsonTextBuffer = '';
+    const textDecoder = new TextDecoder();
+
+    function parseBinaryLoRaPacket(packet) {
+        const view = new DataView(packet.buffer);
+        return {
+            pm1_0: view.getUint16(0, true),
+            pm2_5: view.getUint16(2, true),
+            pm10: view.getUint16(4, true),
+            temp: view.getInt16(6, true) / 10.0,
+            hum: view.getInt16(8, true) / 10.0,
+            aqi: view.getUint16(10, true),
+            tvoc: view.getUint16(12, true),
+            eco2: view.getUint16(14, true)
+        };
+    }
+
+    function handleJsonLoRaChunk(value) {
+        jsonTextBuffer += textDecoder.decode(value, { stream: true });
+        const lines = jsonTextBuffer.split(/\r?\n/);
+        jsonTextBuffer = lines.pop() || '';
+
+        lines.forEach(line => {
+            const trimmed = line.trim();
+            if (!trimmed) return;
+            const jsonStart = trimmed.indexOf('{');
+            const jsonEnd = trimmed.lastIndexOf('}');
+            const jsonText = jsonStart >= 0 && jsonEnd > jsonStart
+                ? trimmed.slice(jsonStart, jsonEnd + 1)
+                : trimmed;
+            try {
+                const parsedData = JSON.parse(jsonText);
+                console.debug('Nhận dữ liệu LoRa qua Serial JSON:', parsedData);
+                storeStationData(parsedData, 1);
+            } catch (error) {
+                console.warn('Bỏ qua dòng LoRa JSON không hợp lệ:', trimmed, error);
+            }
+        });
+
+        const pendingJson = jsonTextBuffer.trim();
+        const pendingStart = pendingJson.indexOf('{');
+        const pendingEnd = pendingJson.lastIndexOf('}');
+        if (pendingStart >= 0 && pendingEnd > pendingStart) {
+            try {
+                const parsedData = JSON.parse(pendingJson.slice(pendingStart, pendingEnd + 1));
+                console.debug('Nhận dữ liệu LoRa qua Serial JSON:', parsedData);
+                storeStationData(parsedData, 1);
+                jsonTextBuffer = pendingJson.slice(pendingEnd + 1);
+            } catch (error) {
+                // Chờ thêm byte nếu JSON chưa hoàn chỉnh.
+            }
+        }
+    }
 
     // Bọc vòng lặp vào promise để có thể 'await' ở hàm disconnect
     readLoopPromise = (async () => {
@@ -1070,21 +1330,23 @@ async function readSerialLoop() {
                     newBuffer.set(value, buffer.length);
                     buffer = newBuffer;
 
+                    if (serialMode !== 'binary') {
+                        const previewText = textDecoder.decode(buffer, { stream: false }).trimStart();
+                        if (previewText.includes('{') || /^[\x09\x0a\x0d\x20-\x7e]*$/.test(previewText)) serialMode = 'json';
+                    }
+
+                    if (serialMode === 'json') {
+                        handleJsonLoRaChunk(value);
+                        buffer = new Uint8Array(0);
+                        continue;
+                    }
+
+                    if (!serialMode && buffer.length >= PACKET_SIZE) serialMode = 'binary';
+
                     while (buffer.length >= PACKET_SIZE) {
                         const packet = buffer.slice(0, PACKET_SIZE);
                         buffer = buffer.slice(PACKET_SIZE);
-                        const view = new DataView(packet.buffer);
-                        const data = {
-                            pm1_0: view.getUint16(0, true),
-                            pm2_5: view.getUint16(2, true),
-                            pm10: view.getUint16(4, true),
-                            temp: view.getInt16(6, true) / 10.0,
-                            hum: view.getInt16(8, true) / 10.0,
-                            aqi: view.getUint16(10, true),
-                            tvoc: view.getUint16(12, true),
-                            eco2: view.getUint16(14, true)
-                        };
-                        storeStationData(data, 1); // Trạm 1 là LoRa
+                        storeStationData(parseBinaryLoRaPacket(packet), 1); // Trạm 1 là LoRa
                     }
                 }
             } catch (error) {

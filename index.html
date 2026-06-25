@@ -11,7 +11,7 @@
     <!-- ECharts CDN -->
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
     <!-- EmailJS CDN (For sending emails without backend) -->
-    <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/@emailjs/browser@3/dist/email.min.js"></script>
+    <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
     <!-- Leaflet CSS & JS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
         integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
@@ -256,12 +256,27 @@
                     <div class="left-settings">
                         <!-- LoRa Config -->
                         <div class="settings-card" style="margin-bottom: 2rem;">
-                            <h3><i class="fa-solid fa-satellite-dish"></i> Kết nối LoRa (COM Port)</h3>
-                            <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.95rem;">Kết nối
-                                trực tiếp thiết bị thu LoRa (USB UART) qua cổng Serial Web API để nhận dữ liệu JSON.</p>
+                            <h3><i class="fa-solid fa-satellite-dish"></i> Gateway LoRa qua MQTT</h3>
+                            <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.95rem;">Máy cắm LoRa
+                                bấm kết nối COM để đọc USB Serial rồi đẩy Trạm 1 lên MQTT. Các máy khác chỉ cần mở web
+                                và kết nối MQTT để xem dữ liệu LoRa.</p>
+                            <div class="gateway-status-card">
+                                <div>
+                                    <span>Vai trò máy này</span>
+                                    <strong id="lora-role-text">Viewer MQTT</strong>
+                                </div>
+                                <div>
+                                    <span>Topic LoRa</span>
+                                    <strong id="lora-topic-text">--</strong>
+                                </div>
+                            </div>
                             <div style="margin-bottom: 1rem; font-weight: 500;">
-                                Trạng thái: <span id="lora-status-text" style="color: var(--status-offline);">Chưa kết
+                                Gateway COM: <span id="lora-status-text" style="color: var(--status-offline);">Chưa kết
                                     nối</span>
+                            </div>
+                            <div style="margin-bottom: 1rem; font-weight: 500;">
+                                Đẩy MQTT: <span id="lora-publish-status" style="color: var(--text-secondary);">Đang nghe
+                                    dữ liệu LoRa qua MQTT</span>
                             </div>
                             <div class="form-group" style="margin-bottom: 1rem;">
                                 <label>Tốc độ Baud (Baud Rate)</label>
