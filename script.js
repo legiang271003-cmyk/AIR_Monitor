@@ -646,7 +646,7 @@ function updateHistoryChart(history) {
             { name: 'eCO2 (ppm)', type: 'line', smooth: true, yAxisIndex: 1, itemStyle: { color: '#64748b' }, data: history.eco2.slice(startIndex) },
             { name: 'TVOC (ppb)', type: 'line', smooth: true, yAxisIndex: 1, itemStyle: { color: '#ec4899' }, data: history.tvoc.slice(startIndex) }
         ]
-    }, { replaceMerge: ['series'] });
+    });
 }
 
 function syncSeriesCheckboxes(selected) {
