@@ -5,6 +5,7 @@ const DEFAULT_CONFIG = {
     mqttPass: SYS_CONFIG.MQTT_DEFAULT_PASS,
     mqttTopic: SYS_CONFIG.MQTT_DEFAULT_TOPIC,
     email: '',
+    emailEnabled: false,
     alarmEnabled: false,
     geminiKey: SYS_CONFIG.GEMINI_API_KEY,
     limits: SYS_CONFIG.DEFAULT_LIMITS
@@ -49,6 +50,8 @@ let activeStation = 1;
 let activeWeatherStation = 1;
 const HISTORY_RETENTION_MS = 60 * 60 * 1000;
 const MAX_HISTORY_POINTS = 5000;
+const STATION_SIGNAL_TIMEOUT_MS = 60 * 1000;
+const STATION_SIGNAL_TIMEOUT_SECONDS = STATION_SIGNAL_TIMEOUT_MS / 1000;
 const LORA_DUST_CORRECTION_FACTORS = {
     pm1_0: 4.2,   // 21 (LoRa) / 5 (MQTT)
     pm2_5: 5.83,  // 35 (LoRa) / 6 (MQTT)
@@ -184,12 +187,12 @@ function initConfigForms() {
     document.getElementById('cfg-email-1').value = emails[0] || '';
     document.getElementById('cfg-email-2').value = emails[1] || '';
     document.getElementById('cfg-email-3').value = emails[2] || '';
+    updateEmailToggleButton();
 
     document.getElementById('cfg-max-temp').value = appConfig.limits.maxTemp;
     document.getElementById('cfg-min-temp').value = appConfig.limits.minTemp;
     document.getElementById('cfg-max-hum').value = appConfig.limits.maxHum;
     document.getElementById('cfg-min-hum').value = appConfig.limits.minHum;
-    document.getElementById('cfg-max-pm25').value = appConfig.limits.maxPm25;
     document.getElementById('cfg-max-eco2').value = appConfig.limits.maxEco2;
     document.getElementById('cfg-max-tvoc').value = appConfig.limits.maxTvoc;
     document.getElementById('cfg-max-aqi').value = appConfig.limits.maxAqi;
@@ -230,7 +233,6 @@ document.getElementById('btn-save-alerts').addEventListener('click', () => {
     appConfig.limits.minTemp = parseFloat(document.getElementById('cfg-min-temp').value);
     appConfig.limits.maxHum = parseFloat(document.getElementById('cfg-max-hum').value);
     appConfig.limits.minHum = parseFloat(document.getElementById('cfg-min-hum').value);
-    appConfig.limits.maxPm25 = parseFloat(document.getElementById('cfg-max-pm25').value);
     appConfig.limits.maxEco2 = parseFloat(document.getElementById('cfg-max-eco2').value);
     appConfig.limits.maxTvoc = parseFloat(document.getElementById('cfg-max-tvoc').value);
     appConfig.limits.maxAqi = parseFloat(document.getElementById('cfg-max-aqi').value);
@@ -300,7 +302,43 @@ function queueEmailSend(task) {
     return emailSendQueue;
 }
 
+function buildRecipientParams(email) {
+    return {
+        to_email: email,
+        email: email,
+        recipient_email: email,
+        user_email: email,
+        reply_to: email
+    };
+}
+
+function updateEmailToggleButton() {
+    const button = document.getElementById('btn-toggle-email');
+    if (!button) return;
+    const enabled = Boolean(appConfig.emailEnabled);
+    button.classList.toggle('enabled', enabled);
+    button.setAttribute('aria-pressed', String(enabled));
+    button.innerHTML = enabled
+        ? '<i class="fa-solid fa-envelope-circle-check"></i> Đang cho phép gửi mail'
+        : '<i class="fa-solid fa-envelope-circle-xmark"></i> Đang chặn gửi mail';
+}
+
+document.getElementById('btn-toggle-email')?.addEventListener('click', () => {
+    appConfig.emailEnabled = !appConfig.emailEnabled;
+    saveConfig();
+    updateEmailToggleButton();
+    showToast(
+        appConfig.emailEnabled ? 'Đã bật gửi mail' : 'Đã tắt gửi mail',
+        appConfig.emailEnabled
+            ? 'Khi vượt ngưỡng, hệ thống sẽ gửi EmailJS theo cooldown đã cấu hình.'
+            : 'Cảnh báo vẫn hiện trên web, nhưng sẽ không gọi EmailJS để tránh hết quota.',
+        appConfig.emailEnabled ? 'success' : 'warning'
+    );
+});
+
 function triggerEmailAlert(stationId, paramName, currentValue, limitValue, message, fullData) {
+    if (!appConfig.emailEnabled) return;
+
     const alertEmails = getAlertEmails();
     if (!alertEmails.length) return;
 
@@ -342,7 +380,7 @@ function triggerEmailAlert(stationId, paramName, currentValue, limitValue, messa
     Promise.allSettled(alertEmails.map(email => queueEmailSend(() => (
         emailjs.send(SYS_CONFIG.EMAILJS_SERVICE_ID, SYS_CONFIG.EMAILJS_TEMPLATE_ID, {
             ...templateParams,
-            to_email: email
+            ...buildRecipientParams(email)
         })
     )))).then(results => {
         const successCount = results.filter(result => result.status === 'fulfilled').length;
@@ -527,7 +565,6 @@ function checkThresholds(data, stationId) {
         { active: data.temp < L.minTemp, param: 'Nhiệt độ', value: data.temp, limit: L.minTemp, message: 'Nhiệt độ QUÁ THẤP', display: `${data.temp}°C < ${L.minTemp}°C` },
         { active: data.hum > L.maxHum, param: 'Độ ẩm', value: data.hum, limit: L.maxHum, message: 'Độ ẩm QUÁ CAO', display: `${data.hum}% > ${L.maxHum}%` },
         { active: data.hum < L.minHum, param: 'Độ ẩm', value: data.hum, limit: L.minHum, message: 'Độ ẩm QUÁ THẤP', display: `${data.hum}% < ${L.minHum}%` },
-        { active: data.pm2_5 > L.maxPm25, param: 'Bụi mịn PM2.5', value: data.pm2_5, limit: L.maxPm25, message: 'Bụi mịn PM2.5 vượt ngưỡng', display: `PM2.5 ${data.pm2_5} µg/m³` },
         { active: data.eco2 > L.maxEco2, param: 'eCO2', value: data.eco2, limit: L.maxEco2, message: 'Nồng độ eCO2 vượt ngưỡng', display: `eCO2 ${data.eco2} ppm` },
         { active: data.tvoc > L.maxTvoc, param: 'TVOC', value: data.tvoc, limit: L.maxTvoc, message: 'Nồng độ TVOC vượt ngưỡng', display: `TVOC ${data.tvoc} ppb` },
         { active: mappedAqi > L.maxAqi, param: 'Chỉ số AQI', value: mappedAqi, limit: L.maxAqi, message: 'Chỉ số AQI vượt ngưỡng', display: `AQI ${mappedAqi}` }
@@ -596,6 +633,15 @@ chartPm10.setOption(getGaugeOption('PM10', 'µg/m³', 0, 200, 4, colorPm));
 
 const chartHistory = echarts.init(document.getElementById('history-chart'));
 const CHART_SERIES_NAMES = ['Nhiệt độ (°C)', 'Độ ẩm (%)', 'PM1.0 (µg/m³)', 'PM2.5 (µg/m³)', 'PM10 (µg/m³)', 'eCO2 (ppm)', 'TVOC (ppb)'];
+const HISTORY_SERIES_CONFIGS = [
+    { name: 'Nhiệt độ (°C)', field: 'temp', color: '#ef4444' },
+    { name: 'Độ ẩm (%)', field: 'hum', color: '#3388dd' },
+    { name: 'PM1.0 (µg/m³)', field: 'pm1_0', color: '#10b981' },
+    { name: 'PM2.5 (µg/m³)', field: 'pm25', color: '#f59e0b' },
+    { name: 'PM10 (µg/m³)', field: 'pm10', color: '#8b5cf6' },
+    { name: 'eCO2 (ppm)', field: 'eco2', color: '#64748b', yAxisIndex: 1 },
+    { name: 'TVOC (ppb)', field: 'tvoc', color: '#ec4899', yAxisIndex: 1 }
+];
 const CHART_FILTER_GROUPS = {
     all: CHART_SERIES_NAMES,
     environment: ['Nhiệt độ (°C)', 'Độ ẩm (%)'],
@@ -604,6 +650,13 @@ const CHART_FILTER_GROUPS = {
 };
 let chartTimeRangeMinutes = 5;
 let activeChartMetricGroup = 'all';
+let historyChartRenderState = {
+    stationId: null,
+    rangeMinutes: null,
+    visibleStart: 0,
+    renderedLength: 0,
+    lastTimestamp: null
+};
 
 chartHistory.setOption({
     tooltip: { trigger: 'axis' },
@@ -635,18 +688,54 @@ function updateHistoryChart(history) {
     const timestamps = history.timestamp || [];
     const firstVisibleIndex = timestamps.findIndex(timestamp => timestamp >= cutoffTime);
     const startIndex = firstVisibleIndex === -1 ? timestamps.length : firstVisibleIndex;
+    const lastRenderedIndex = historyChartRenderState.renderedLength - 1;
+    const canAppend =
+        historyChartRenderState.stationId === activeStation &&
+        historyChartRenderState.rangeMinutes === chartTimeRangeMinutes &&
+        historyChartRenderState.visibleStart === startIndex &&
+        historyChartRenderState.renderedLength > 0 &&
+        historyChartRenderState.renderedLength < timestamps.length &&
+        timestamps[lastRenderedIndex] === historyChartRenderState.lastTimestamp;
+
+    if (canAppend) {
+        const appendStart = historyChartRenderState.renderedLength;
+        chartHistory.setOption({
+            xAxis: { data: history.time.slice(startIndex) }
+        }, { lazyUpdate: true });
+
+        try {
+            HISTORY_SERIES_CONFIGS.forEach((config, seriesIndex) => {
+                chartHistory.appendData({
+                    seriesIndex,
+                    data: history[config.field].slice(appendStart)
+                });
+            });
+            historyChartRenderState.renderedLength = timestamps.length;
+            historyChartRenderState.lastTimestamp = timestamps.at(-1) || null;
+            return;
+        } catch (error) {
+            console.warn('Không thể append điểm mới vào biểu đồ, dựng lại một lần.', error);
+        }
+    }
+
     chartHistory.setOption({
         xAxis: { data: history.time.slice(startIndex) },
-        series: [
-            { name: 'Nhiệt độ (°C)', type: 'line', smooth: true, itemStyle: { color: '#ef4444' }, data: history.temp.slice(startIndex) },
-            { name: 'Độ ẩm (%)', type: 'line', smooth: true, itemStyle: { color: '#3388dd' }, data: history.hum.slice(startIndex) },
-            { name: 'PM1.0 (µg/m³)', type: 'line', smooth: true, itemStyle: { color: '#10b981' }, data: history.pm1_0.slice(startIndex) },
-            { name: 'PM2.5 (µg/m³)', type: 'line', smooth: true, itemStyle: { color: '#f59e0b' }, data: history.pm25.slice(startIndex) },
-            { name: 'PM10 (µg/m³)', type: 'line', smooth: true, itemStyle: { color: '#8b5cf6' }, data: history.pm10.slice(startIndex) },
-            { name: 'eCO2 (ppm)', type: 'line', smooth: true, yAxisIndex: 1, itemStyle: { color: '#64748b' }, data: history.eco2.slice(startIndex) },
-            { name: 'TVOC (ppb)', type: 'line', smooth: true, yAxisIndex: 1, itemStyle: { color: '#ec4899' }, data: history.tvoc.slice(startIndex) }
-        ]
+        series: HISTORY_SERIES_CONFIGS.map(config => ({
+            name: config.name,
+            type: 'line',
+            smooth: true,
+            yAxisIndex: config.yAxisIndex || 0,
+            itemStyle: { color: config.color },
+            data: history[config.field].slice(startIndex)
+        }))
     });
+    historyChartRenderState = {
+        stationId: activeStation,
+        rangeMinutes: chartTimeRangeMinutes,
+        visibleStart: startIndex,
+        renderedLength: timestamps.length,
+        lastTimestamp: timestamps.at(-1) || null
+    };
 }
 
 function syncSeriesCheckboxes(selected) {
@@ -800,12 +889,15 @@ function publishLoRaData(data) {
 function storeStationData(data, stationId, options = {}) {
     data = normalizeStationData(data, stationId);
     const st = stationsData[stationId];
+    const receivedAt = Date.now();
     const sourceTimestamp = Number(data._publishedAt || data.timestamp || data.timeMs);
-    const sampleTimestamp = options.source === 'mqtt' && Number.isFinite(sourceTimestamp)
+    const sourceTimestampIsFresh = Number.isFinite(sourceTimestamp) &&
+        Math.abs(receivedAt - sourceTimestamp) <= STATION_SIGNAL_TIMEOUT_MS;
+    const sampleTimestamp = options.source === 'mqtt' && sourceTimestampIsFresh
         ? sourceTimestamp
-        : Date.now();
+        : receivedAt;
     st.current = data;
-    st.lastTime = sampleTimestamp;
+    st.lastTime = receivedAt;
     st.timeoutAlerted = false;
     updateStationFreshness(stationId);
 
@@ -842,6 +934,13 @@ function storeStationData(data, stationId, options = {}) {
     if (stationId === 1 && options.source !== 'mqtt') {
         publishLoRaData(data);
     }
+}
+
+function markLoRaSerialHeartbeat() {
+    if (!isLoraConnected) return;
+    stationsData[1].lastTime = Date.now();
+    stationsData[1].timeoutAlerted = false;
+    updateStationFreshness(1);
 }
 
 function resetAIAdvice() {
@@ -939,10 +1038,9 @@ function analyzeAIAdvice() {
         const minsToLimit = Math.max(1, Math.round((L.maxEco2 - currEco2) / (slopeEco2 * 30)));
         adviceMsg = `⚠️ <strong>Cảnh báo ngạt khí:</strong> eCO2 đang tăng liên tục với tốc độ <b>${ratePerMin} ppm/phút</b>. Dự báo sẽ chạm ngưỡng độc hại (${L.maxEco2} ppm) trong khoảng <b>${minsToLimit} phút</b> nữa. Yêu cầu bật quạt thông gió hoặc mở cửa sổ khẩn cấp!`;
     } else if (currPm > 40 && slopePm > 0.5) {
-        warningLevel = 2;
+        warningLevel = 1;
         const ratePerMin = (slopePm * 30).toFixed(1);
-        const minsToLimit = Math.max(1, Math.round((L.maxPm25 - currPm) / (slopePm * 30)));
-        adviceMsg = `⚠️ <strong>Báo động khói bụi:</strong> PM2.5 đang tăng vọt <b>${ratePerMin} µg/m³/phút</b> (Dấu hiệu khói thuốc/đun nấu/cháy). Khả năng cao sẽ chạm ngưỡng nguy hiểm trong <b>${minsToLimit} phút</b>. Hãy đeo khẩu trang và kiểm tra xung quanh!`;
+        adviceMsg = `🔔 <strong>Xu hướng bụi tăng:</strong> PM2.5 đang tăng khoảng <b>${ratePerMin} µg/m³/phút</b>. Hãy theo dõi chỉ số AQI tổng hợp và kiểm tra nguồn bụi trong khu vực.`;
     } else if (slopePm < -0.5 || slopeEco2 < -2) {
         warningLevel = 0;
         adviceMsg = "🌱 <strong>Tiến triển tốt:</strong> Chất lượng không khí đang được cải thiện rõ rệt theo thời gian. Nồng độ các chất có hại đang giảm xuống. Tốc độ làm sạch không khí đang rất hiệu quả!";
@@ -1194,6 +1292,9 @@ async function connectLoRa() {
         showToast('Thành công', 'Đã kết nối bộ thu LoRa', 'success');
 
         isLoraConnected = true;
+        stationsData[1].lastTime = Date.now();
+        stationsData[1].timeoutAlerted = false;
+        updateStationFreshness(1);
         updateLoRaGatewayInfo();
         setLoRaPublishStatus(
             isMqttConnected
@@ -1323,6 +1424,7 @@ async function readSerialLoop() {
                 while (keepReading) {
                     const { value, done } = await serialReader.read();
                     if (done || !keepReading) break;
+                    markLoRaSerialHeartbeat();
 
                     // Logic ghép nối và xử lý Binary (Giữ nguyên của bạn)
                     let newBuffer = new Uint8Array(buffer.length + value.length);
@@ -1389,9 +1491,9 @@ function updateConnectionStatusBadge() {
     if (errorTexts.length > 0) {
         statusDot.className = 'status-dot error';
         if (okTexts.length > 0) {
-            statusText.textContent = `Lỗi mất tín hiệu: ${errorTexts.join(' & ')} (Đang nhận: ${okTexts.join(' & ')})`;
+            statusText.textContent = `Chưa nhận dữ liệu: ${errorTexts.join(' & ')} (Đang nhận: ${okTexts.join(' & ')})`;
         } else {
-            statusText.textContent = `Lỗi: Mất tín hiệu (${errorTexts.join(' & ')})`;
+            statusText.textContent = `Chưa nhận dữ liệu (${errorTexts.join(' & ')})`;
         }
     } else {
         statusDot.className = 'status-dot connected';
@@ -1405,8 +1507,8 @@ function updateStationFreshness(stationId) {
     if (!element || !station || Object.keys(station.current).length === 0) return;
 
     const ageSeconds = Math.max(0, Math.floor((Date.now() - station.lastTime) / 1000));
-    if (station.timeoutAlerted || ageSeconds > 20) {
-        element.textContent = 'Mất tín hiệu';
+    if (station.timeoutAlerted || ageSeconds > STATION_SIGNAL_TIMEOUT_SECONDS) {
+        element.textContent = 'Chưa nhận dữ liệu';
         element.dataset.state = 'offline';
     } else {
         element.textContent = ageSeconds < 3 ? 'Vừa cập nhật' : `${ageSeconds} giây trước`;
@@ -1414,14 +1516,14 @@ function updateStationFreshness(stationId) {
     }
 }
 
-// Kiểm tra mất dữ liệu quá 20s cho từng trạm
+// Kiểm tra mất dữ liệu quá ngưỡng cho từng trạm.
 setInterval(() => {
     const now = Date.now();
 
     if (isLoraConnected) {
-        if (now - stationsData[1].lastTime > 20000) {
+        if (now - stationsData[1].lastTime > STATION_SIGNAL_TIMEOUT_MS) {
             if (!stationsData[1].timeoutAlerted) {
-                showToast('Cảnh báo dữ liệu', 'Trạm 1 (LoRa) mất tín hiệu hơn 20s!', 'error');
+                showToast('Cảnh báo dữ liệu', `Trạm 1 (LoRa) chưa có dữ liệu mới hơn ${STATION_SIGNAL_TIMEOUT_SECONDS}s!`, 'error');
                 stationsData[1].timeoutAlerted = true;
             }
         } else {
@@ -1430,9 +1532,9 @@ setInterval(() => {
     }
 
     if (isMqttConnected) {
-        if (now - stationsData[2].lastTime > 20000) {
+        if (now - stationsData[2].lastTime > STATION_SIGNAL_TIMEOUT_MS) {
             if (!stationsData[2].timeoutAlerted) {
-                showToast('Cảnh báo dữ liệu', 'Trạm 2 (MQTT) mất tín hiệu hơn 20s!', 'error');
+                showToast('Cảnh báo dữ liệu', `Trạm 2 (MQTT) chưa có dữ liệu mới hơn ${STATION_SIGNAL_TIMEOUT_SECONDS}s!`, 'error');
                 stationsData[2].timeoutAlerted = true;
             }
         } else {

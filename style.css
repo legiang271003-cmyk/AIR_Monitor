@@ -457,6 +457,7 @@ header {
 .weather-header,
 .weather-current,
 .weather-main,
+.email-send-setting,
 .alarm-setting {
     display: flex;
     align-items: center;
@@ -605,6 +606,31 @@ header {
     background: #fff7ed;
     border: 1px solid #fed7aa;
     border-radius: 0.8rem;
+}
+
+.email-send-setting {
+    margin: 1rem 0;
+    padding: 1rem;
+    background: #f8fafc;
+    border: 1px solid var(--card-border);
+    border-radius: 0.8rem;
+}
+
+.email-send-setting p {
+    margin-top: 0.3rem;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+}
+
+.email-toggle {
+    flex: 0 0 auto;
+    color: var(--utt-red);
+}
+
+.email-toggle.enabled {
+    color: #fff;
+    background: #059669;
+    border-color: #059669;
 }
 
 .alarm-setting p {
@@ -1303,6 +1329,7 @@ header {
         min-width: calc(100% - 4rem);
     }
 
+    .email-send-setting,
     .alarm-setting {
         align-items: stretch;
         flex-direction: column;

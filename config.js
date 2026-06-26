@@ -11,9 +11,9 @@ const SYS_CONFIG = {
     MQTT_DEFAULT_TOPIC: 'utt/airquality/data',
 
     // 2. CẤU HÌNH KHÓA EMAILJS
-    EMAILJS_PUBLIC_KEY: '9hNUJSyH8R5ApIGj7',
-    EMAILJS_SERVICE_ID: 'service_rr2rcfv',
-    EMAILJS_TEMPLATE_ID: 'template_vt19xpj',
+    EMAILJS_PUBLIC_KEY: 'A6jyfrAsu4rca4Oio',
+    EMAILJS_SERVICE_ID: 'service_mfgknun',
+    EMAILJS_TEMPLATE_ID: 'template_29v2rze',
 
     // 3. CẤU HÌNH GEMINI API
     GEMINI_API_KEY: atob('QVEuQWI4Uk42S3RmRDZlbTIyRGJZUW9YQ0l3NHE4VGFmUTZvZTFHTGpfQm9kZXVDMnQzdnc='),
@@ -27,7 +27,6 @@ const SYS_CONFIG = {
         minTemp: 15,
         maxHum: 80,
         minHum: 30,
-        maxPm25: 50,
         maxEco2: 1000,
         maxTvoc: 500,
         maxAqi: 100

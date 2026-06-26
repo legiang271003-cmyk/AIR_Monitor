@@ -344,9 +344,19 @@
                             <label>Email nhận cảnh báo 3 (Tùy chọn)</label>
                             <input type="email" id="cfg-email-3" placeholder="email3@yahoo.com">
                         </div>
+                        <div class="email-send-setting">
+                            <div>
+                                <strong><i class="fa-solid fa-paper-plane"></i> Quyền gửi mail cảnh báo</strong>
+                                <p>Tắt khi chỉ muốn xem cảnh báo trên web và giữ quota EmailJS.</p>
+                            </div>
+                            <button id="btn-toggle-email" class="btn-secondary email-toggle" type="button"
+                                aria-pressed="false">
+                                <i class="fa-solid fa-envelope-circle-xmark"></i> Đang chặn gửi mail
+                            </button>
+                        </div>
 
                         <h4 class="sub-heading"><i class="fa-solid fa-triangle-exclamation"></i> Ngưỡng cảnh báo (Vượt
-                            ngưỡng sẽ gửi Email và phát còi trên web)</h4>
+                            ngưỡng sẽ gửi Email nếu được bật và phát còi trên web)</h4>
                         <div class="thresholds-grid">
                             <div class="form-group">
                                 <label>Nhiệt độ tối đa (°C)</label>
@@ -363,10 +373,6 @@
                             <div class="form-group">
                                 <label>Độ ẩm tối thiểu (%)</label>
                                 <input type="number" id="cfg-min-hum" value="30">
-                            </div>
-                            <div class="form-group">
-                                <label>PM2.5 tối đa (µg/m³)</label>
-                                <input type="number" id="cfg-max-pm25" value="50">
                             </div>
                             <div class="form-group">
                                 <label>eCO2 tối đa (ppm)</label>
