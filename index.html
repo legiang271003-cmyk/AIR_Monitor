@@ -7,7 +7,7 @@
     <title>UTT - Air Quality Dashboard</title>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=lora-cal-1">
     <!-- ECharts CDN -->
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
     <!-- EmailJS CDN (For sending emails without backend) -->
@@ -171,10 +171,13 @@
                             <details class="series-picker" id="series-picker">
                                 <summary><i class="fa-solid fa-list-check"></i> Từng đường</summary>
                                 <div class="series-picker-menu">
-                                    <label><input type="checkbox" data-chart-series="Nhiệt độ (°C)" checked> Nhiệt độ</label>
+                                    <label><input type="checkbox" data-chart-series="Nhiệt độ (°C)" checked> Nhiệt
+                                        độ</label>
                                     <label><input type="checkbox" data-chart-series="Độ ẩm (%)" checked> Độ ẩm</label>
-                                    <label><input type="checkbox" data-chart-series="PM1.0 (µg/m³)" checked> PM1.0</label>
-                                    <label><input type="checkbox" data-chart-series="PM2.5 (µg/m³)" checked> PM2.5</label>
+                                    <label><input type="checkbox" data-chart-series="PM1.0 (µg/m³)" checked>
+                                        PM1.0</label>
+                                    <label><input type="checkbox" data-chart-series="PM2.5 (µg/m³)" checked>
+                                        PM2.5</label>
                                     <label><input type="checkbox" data-chart-series="PM10 (µg/m³)" checked> PM10</label>
                                     <label><input type="checkbox" data-chart-series="eCO2 (ppm)" checked> eCO2</label>
                                     <label><input type="checkbox" data-chart-series="TVOC (ppb)" checked> TVOC</label>
@@ -257,7 +260,8 @@
                         <!-- LoRa Config -->
                         <div class="settings-card" style="margin-bottom: 2rem;">
                             <h3><i class="fa-solid fa-satellite-dish"></i> Gateway LoRa qua MQTT</h3>
-                            <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.95rem;">Máy cắm LoRa
+                            <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.95rem;">Máy cắm
+                                LoRa
                                 bấm kết nối COM để đọc USB Serial rồi đẩy Trạm 1 lên MQTT. Các máy khác chỉ cần mở web
                                 và kết nối MQTT để xem dữ liệu LoRa.</p>
                             <div class="gateway-status-card">
@@ -296,6 +300,32 @@
                                 <button class="btn-primary" id="btn-disconnect-lora"
                                     style="display: none; background: linear-gradient(135deg, #64748b, #475569); margin-top: 0;"><i
                                         class="fa-solid fa-plug-circle-xmark"></i> Ngắt kết nối</button>
+                            </div>
+                            <div class="uart-log-panel" aria-labelledby="lora-uart-log-title">
+                                <div class="uart-log-header">
+                                    <div>
+                                        <h4 id="lora-uart-log-title"><i class="fa-solid fa-terminal"></i> Log UART Trạm
+                                            1 (LoRa)</h4>
+                                        <p>Dòng dữ liệu COM</p>
+                                    </div>
+                                    <div class="uart-log-actions">
+                                        <button id="btn-pause-uart-log" class="btn-secondary uart-log-button"
+                                            type="button">
+                                            <i class="fa-solid fa-pause"></i> Tạm dừng
+                                        </button>
+                                        <button id="btn-clear-uart-log" class="btn-secondary uart-log-button"
+                                            type="button">
+                                            <i class="fa-solid fa-trash-can"></i> Xóa
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="uart-log-stats">
+                                    <span>Mode: <strong id="lora-uart-mode">Chưa kết nối</strong></span>
+                                    <span>Bytes: <strong id="lora-uart-bytes">0</strong></span>
+                                    <span>Gói parse: <strong id="lora-uart-packets">0</strong></span>
+                                </div>
+                                <pre id="lora-uart-log"
+                                    class="uart-log-output">Chưa có log UART. Bấm Kết nối LoRa để bắt đầu đọc COM.</pre>
                             </div>
                         </div>
 
@@ -441,7 +471,7 @@
     <!-- Load MQTT.js from CDN -->
     <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
     <script src="config.js"></script>
-    <script src="script.js"></script>
+    <script src="script.js?v=lora-cal-1"></script>
 </body>
 
 </html>

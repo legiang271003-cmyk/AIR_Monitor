@@ -914,6 +914,95 @@ header {
     overflow-wrap: anywhere;
 }
 
+.uart-log-panel {
+    margin-top: 1rem;
+    padding: 1rem;
+    background: #0f172a;
+    border: 1px solid #1e293b;
+    border-radius: 0.75rem;
+    color: #e2e8f0;
+}
+
+.uart-log-header,
+.uart-log-actions,
+.uart-log-stats {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.uart-log-header {
+    justify-content: space-between;
+    margin-bottom: 0.8rem;
+}
+
+.uart-log-header h4 {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.25rem;
+    color: #f8fafc;
+    font-size: 1rem;
+}
+
+.uart-log-header p {
+    color: #94a3b8;
+    font-size: 0.82rem;
+}
+
+.uart-log-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.uart-log-button {
+    min-height: 34px;
+    padding: 0.45rem 0.65rem;
+    border-color: rgba(148, 163, 184, 0.32);
+    background: rgba(15, 23, 42, 0.5);
+    color: #dbeafe;
+    font-size: 0.82rem;
+}
+
+.uart-log-button:hover {
+    box-shadow: 0 5px 15px rgba(2, 6, 23, 0.25);
+}
+
+.uart-log-stats {
+    flex-wrap: wrap;
+    margin-bottom: 0.75rem;
+    color: #cbd5e1;
+    font-size: 0.82rem;
+}
+
+.uart-log-stats span {
+    padding: 0.35rem 0.55rem;
+    background: rgba(148, 163, 184, 0.12);
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 0.45rem;
+}
+
+.uart-log-stats strong {
+    color: #f8fafc;
+}
+
+.uart-log-output {
+    width: 100%;
+    min-height: 220px;
+    max-height: 360px;
+    overflow: auto;
+    padding: 0.85rem;
+    background: #020617;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 0.6rem;
+    color: #bbf7d0;
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
 .sub-heading {
     margin: 1.5rem 0 1rem;
     color: #f59e0b;
@@ -1333,5 +1422,14 @@ header {
     .alarm-setting {
         align-items: stretch;
         flex-direction: column;
+    }
+
+    .uart-log-header {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .uart-log-actions {
+        justify-content: flex-start;
     }
 }

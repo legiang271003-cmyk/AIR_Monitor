@@ -53,10 +53,13 @@ const MAX_HISTORY_POINTS = 5000;
 const STATION_SIGNAL_TIMEOUT_MS = 60 * 1000;
 const STATION_SIGNAL_TIMEOUT_SECONDS = STATION_SIGNAL_TIMEOUT_MS / 1000;
 const LORA_DUST_CORRECTION_FACTORS = {
-    pm1_0: 4.2,   // 21 (LoRa) / 5 (MQTT)
-    pm2_5: 5.83,  // 35 (LoRa) / 6 (MQTT)
-    pm10: 13.67   // 82 (LoRa) / 6 (MQTT)
+    // Hiệu chuẩn từ mẫu đo cùng địa điểm với Trạm 2 ngày 08/07/2026:
+    // LoRa raw xấp xỉ PM1=69, PM2.5=115, PM10=186; Trạm 2 xấp xỉ 17, 18, 18.
+    pm1_0: 4.1,
+    pm2_5: 6.5,
+    pm10: 10.3
 };
+const APPLY_LORA_DUST_CORRECTION = true;
 function getLoRaMqttTopic() {
     return `${appConfig.mqttTopic.replace(/\/$/, '')}/lora`;
 }
@@ -848,7 +851,13 @@ function normalizeStationData(data, stationId) {
         eco2: pickNumber(data, ['eco2', 'eCO2', 'co2'], 400),
         tvoc: pickNumber(data, ['tvoc', 'TVOC'])
     };
-    if (stationId === 1 && !data._normalized) {
+    if (APPLY_LORA_DUST_CORRECTION && stationId === 1 && !data._normalized) {
+        normalizedData._rawDust = {
+            pm1_0: normalizedData.pm1_0,
+            pm2_5: normalizedData.pm2_5,
+            pm10: normalizedData.pm10
+        };
+        normalizedData._dustCalibration = { ...LORA_DUST_CORRECTION_FACTORS };
         Object.entries(LORA_DUST_CORRECTION_FACTORS).forEach(([metric, correctionFactor]) => {
             const rawValue = Number(normalizedData[metric]);
             if (Number.isFinite(rawValue)) {
@@ -1266,6 +1275,119 @@ let serialPort = null;
 let serialReader = null;
 let keepReading = false; // Cờ điều khiển vòng lặp
 let readLoopPromise = null; // Theo dõi luồng đọc
+const LORA_UART_LOG_MAX_LINES = 300;
+let loraUartLogLines = [];
+let loraUartLogPaused = false;
+let loraUartBytes = 0;
+let loraUartPackets = 0;
+
+function setLoraUartMode(modeText) {
+    const modeElement = document.getElementById('lora-uart-mode');
+    if (modeElement) modeElement.textContent = modeText;
+}
+
+function updateLoraUartStats() {
+    const bytesElement = document.getElementById('lora-uart-bytes');
+    const packetsElement = document.getElementById('lora-uart-packets');
+    if (bytesElement) bytesElement.textContent = loraUartBytes.toLocaleString('vi-VN');
+    if (packetsElement) packetsElement.textContent = loraUartPackets.toLocaleString('vi-VN');
+}
+
+function appendLoraUartLog(kind, message) {
+    const logElement = document.getElementById('lora-uart-log');
+    if (!logElement || loraUartLogPaused) return;
+
+    const timestamp = new Date().toLocaleTimeString('vi-VN', { hour12: false });
+    loraUartLogLines.push(`[${timestamp}] ${kind.padEnd(6, ' ')} ${message}`);
+    if (loraUartLogLines.length > LORA_UART_LOG_MAX_LINES) {
+        loraUartLogLines = loraUartLogLines.slice(-LORA_UART_LOG_MAX_LINES);
+    }
+    logElement.textContent = loraUartLogLines.join('\n');
+    logElement.scrollTop = logElement.scrollHeight;
+}
+
+function clearLoraUartLog() {
+    loraUartLogLines = [];
+    loraUartBytes = 0;
+    loraUartPackets = 0;
+    updateLoraUartStats();
+    setLoraUartMode(isLoraConnected ? 'Đang chờ dữ liệu' : 'Chưa kết nối');
+    const logElement = document.getElementById('lora-uart-log');
+    if (logElement) {
+        logElement.textContent = isLoraConnected
+            ? 'Đã xóa log. Đang chờ dữ liệu UART mới...'
+            : 'Chưa có log UART. Bấm Kết nối LoRa để bắt đầu đọc COM.';
+    }
+}
+
+function bytesToHex(bytes, maxBytes = 48) {
+    const visibleBytes = [...bytes.slice(0, maxBytes)]
+        .map(byte => byte.toString(16).padStart(2, '0').toUpperCase())
+        .join(' ');
+    return bytes.length > maxBytes ? `${visibleBytes} ...` : visibleBytes;
+}
+
+function bytesToAscii(bytes, maxBytes = 80) {
+    return [...bytes.slice(0, maxBytes)]
+        .map(byte => {
+            if (byte === 10) return '\\n';
+            if (byte === 13) return '\\r';
+            if (byte === 9) return '\\t';
+            if (byte >= 32 && byte <= 126) return String.fromCharCode(byte);
+            return '.';
+        })
+        .join('') + (bytes.length > maxBytes ? '...' : '');
+}
+
+function pickDisplayValue(data, keys) {
+    for (const key of keys) {
+        if (data[key] !== undefined && data[key] !== null && data[key] !== '') return data[key];
+    }
+    return '--';
+}
+
+function formatParsedLoRaData(data) {
+    return [
+        `PM1=${pickDisplayValue(data, ['pm1_0', 'pm1', 'pm01'])}`,
+        `PM2.5=${pickDisplayValue(data, ['pm2_5', 'pm25', 'pm2.5'])}`,
+        `PM10=${pickDisplayValue(data, ['pm10'])}`,
+        `T=${pickDisplayValue(data, ['temp', 'temperature', 'nhietdo'])}`,
+        `H=${pickDisplayValue(data, ['hum', 'humidity', 'doam'])}`,
+        `AQI=${pickDisplayValue(data, ['aqi', 'AQI'])}`,
+        `TVOC=${pickDisplayValue(data, ['tvoc', 'TVOC'])}`,
+        `eCO2=${pickDisplayValue(data, ['eco2', 'eCO2', 'co2'])}`
+    ].join(', ');
+}
+
+function logLoraUartChunk(value, mode, bufferLength) {
+    loraUartBytes += value.length;
+    updateLoraUartStats();
+    appendLoraUartLog(
+        'RX',
+        `${value.length} byte | mode=${mode || 'auto'} | buffer=${bufferLength} | ASCII="${bytesToAscii(value)}" | HEX=${bytesToHex(value)}`
+    );
+}
+
+function logParsedLoraPacket(source, parsedData, prefix = '') {
+    loraUartPackets += 1;
+    updateLoraUartStats();
+    appendLoraUartLog(source, `${prefix}${formatParsedLoRaData(parsedData)}`);
+}
+
+function updateLoraUartPauseButton() {
+    const button = document.getElementById('btn-pause-uart-log');
+    if (!button) return;
+    button.innerHTML = loraUartLogPaused
+        ? '<i class="fa-solid fa-play"></i> Tiếp tục'
+        : '<i class="fa-solid fa-pause"></i> Tạm dừng';
+}
+
+document.getElementById('btn-clear-uart-log')?.addEventListener('click', clearLoraUartLog);
+document.getElementById('btn-pause-uart-log')?.addEventListener('click', () => {
+    loraUartLogPaused = !loraUartLogPaused;
+    updateLoraUartPauseButton();
+    if (!loraUartLogPaused) appendLoraUartLog('LOG', 'Đã tiếp tục hiển thị log UART.');
+});
 
 async function connectLoRa() {
     try {
@@ -1288,6 +1410,12 @@ async function connectLoRa() {
         document.getElementById('lora-status-text').style.color = 'var(--status-excellent)';
         document.getElementById('btn-connect-lora').style.display = 'none';
         document.getElementById('btn-disconnect-lora').style.display = 'flex';
+        loraUartLogLines = [];
+        loraUartBytes = 0;
+        loraUartPackets = 0;
+        updateLoraUartStats();
+        setLoraUartMode(`Đã kết nối @ ${baudRate}`);
+        appendLoraUartLog('OPEN', `Đã mở cổng COM với baud ${baudRate}.`);
 
         showToast('Thành công', 'Đã kết nối bộ thu LoRa', 'success');
 
@@ -1307,6 +1435,8 @@ async function connectLoRa() {
         readSerialLoop();
     } catch (e) {
         console.error("Lỗi kết nối LoRa:", e);
+        setLoraUartMode('Lỗi kết nối');
+        appendLoraUartLog('ERROR', `Không thể mở cổng COM: ${e.message || e}`);
         showToast('Lỗi', 'Không thể mở cổng COM hoặc bạn chưa chọn cổng', 'error');
     }
 }
@@ -1341,6 +1471,8 @@ async function disconnectLoRa() {
         document.getElementById('btn-disconnect-lora').style.display = 'none';
 
         isLoraConnected = false;
+        setLoraUartMode('Đã ngắt');
+        appendLoraUartLog('CLOSE', 'Đã đóng cổng COM.');
         updateLoRaGatewayInfo();
         setLoRaPublishStatus(
             isMqttConnected
@@ -1353,16 +1485,23 @@ async function disconnectLoRa() {
 
     } catch (e) {
         console.error("Lỗi ngắt kết nối LoRa:", e);
+        setLoraUartMode('Lỗi ngắt');
+        appendLoraUartLog('ERROR', `Không thể ngắt kết nối sạch sẽ: ${e.message || e}`);
         showToast('Lỗi', 'Không thể ngắt kết nối sạch sẽ', 'error');
     }
 }
 
 async function readSerialLoop() {
     keepReading = true;
+    setLoraUartMode('Đang chờ byte UART');
     const PACKET_SIZE = 16;
+    const MIN_BINARY_FRAME_SCORE = 14;
     let buffer = new Uint8Array(0);
     let serialMode = null;
+    let binaryFrameSynced = false;
     let jsonTextBuffer = '';
+    let hexTextByteBuffer = [];
+    let hexTextModeNotified = false;
     const textDecoder = new TextDecoder();
 
     function parseBinaryLoRaPacket(packet) {
@@ -1375,18 +1514,82 @@ async function readSerialLoop() {
             hum: view.getInt16(8, true) / 10.0,
             aqi: view.getUint16(10, true),
             tvoc: view.getUint16(12, true),
-            eco2: view.getUint16(14, true)
+            eco2: view.getUint16(14, true),
+            _rawHex: bytesToHex(packet)
         };
+    }
+
+    function scoreBinaryLoRaPacket(data) {
+        let score = 0;
+        if (data.pm1_0 >= 0 && data.pm1_0 <= 2000) score += 1;
+        if (data.pm2_5 >= 0 && data.pm2_5 <= 2000) score += 1;
+        if (data.pm10 >= 0 && data.pm10 <= 3000) score += 1;
+        if (data.pm1_0 <= data.pm2_5 && data.pm2_5 <= data.pm10) score += 4;
+        if (data.temp >= -20 && data.temp <= 80) score += 3;
+        if (data.hum >= 0 && data.hum <= 100) score += 3;
+        if (data.aqi >= 0 && data.aqi <= 500) score += 1;
+        if (data.tvoc >= 0 && data.tvoc <= 5000) score += 1;
+        if (data.eco2 >= 300 && data.eco2 <= 5000) score += 2;
+        return score;
+    }
+
+    function findBestBinaryFrame(bytes) {
+        let best = null;
+        const maxOffset = Math.min(PACKET_SIZE - 1, bytes.length - PACKET_SIZE);
+        for (let offset = 0; offset <= maxOffset; offset++) {
+            const packet = bytes.slice(offset, offset + PACKET_SIZE);
+            const parsedData = parseBinaryLoRaPacket(packet);
+            const score = scoreBinaryLoRaPacket(parsedData);
+            if (!best || score > best.score) {
+                best = { offset, packet, parsedData, score };
+            }
+        }
+        return best && best.score >= MIN_BINARY_FRAME_SCORE ? best : null;
+    }
+
+    function extractCurlyHexBytes(text) {
+        const matches = [...text.matchAll(/\{([0-9a-fA-F]{2})\}/g)];
+        if (!matches.length) return { bytes: [], lastIndex: 0 };
+
+        return {
+            bytes: matches.map(match => parseInt(match[1], 16)),
+            lastIndex: matches.at(-1).index + matches.at(-1)[0].length
+        };
+    }
+
+    function processCurlyHexTextBuffer() {
+        const extracted = extractCurlyHexBytes(jsonTextBuffer);
+        if (!extracted.bytes.length) return false;
+
+        if (!hexTextModeNotified) {
+            appendLoraUartLog('MODE', 'Phát hiện dạng HEX text {XX}; parse như gói binary 16 byte.');
+            setLoraUartMode('HEX text {XX}');
+            hexTextModeNotified = true;
+        }
+
+        hexTextByteBuffer.push(...extracted.bytes);
+        jsonTextBuffer = jsonTextBuffer.slice(extracted.lastIndex);
+
+        while (hexTextByteBuffer.length >= PACKET_SIZE) {
+            const packet = new Uint8Array(hexTextByteBuffer.splice(0, PACKET_SIZE));
+            const parsedPacket = parseBinaryLoRaPacket(packet);
+            logParsedLoraPacket('HEXTXT', parsedPacket, `HEX=${bytesToHex(packet)} -> `);
+            storeStationData(parsedPacket, 1);
+        }
+        return true;
     }
 
     function handleJsonLoRaChunk(value) {
         jsonTextBuffer += textDecoder.decode(value, { stream: true });
+        if (processCurlyHexTextBuffer()) return;
+
         const lines = jsonTextBuffer.split(/\r?\n/);
         jsonTextBuffer = lines.pop() || '';
 
         lines.forEach(line => {
             const trimmed = line.trim();
             if (!trimmed) return;
+
             const jsonStart = trimmed.indexOf('{');
             const jsonEnd = trimmed.lastIndexOf('}');
             const jsonText = jsonStart >= 0 && jsonEnd > jsonStart
@@ -1395,9 +1598,11 @@ async function readSerialLoop() {
             try {
                 const parsedData = JSON.parse(jsonText);
                 console.debug('Nhận dữ liệu LoRa qua Serial JSON:', parsedData);
+                logParsedLoraPacket('JSON', parsedData);
                 storeStationData(parsedData, 1);
             } catch (error) {
                 console.warn('Bỏ qua dòng LoRa JSON không hợp lệ:', trimmed, error);
+                appendLoraUartLog('BADJSN', `${trimmed} | ${error.message}`);
             }
         });
 
@@ -1408,12 +1613,30 @@ async function readSerialLoop() {
             try {
                 const parsedData = JSON.parse(pendingJson.slice(pendingStart, pendingEnd + 1));
                 console.debug('Nhận dữ liệu LoRa qua Serial JSON:', parsedData);
+                logParsedLoraPacket('JSON', parsedData);
                 storeStationData(parsedData, 1);
                 jsonTextBuffer = pendingJson.slice(pendingEnd + 1);
             } catch (error) {
                 // Chờ thêm byte nếu JSON chưa hoàn chỉnh.
             }
         }
+    }
+
+    function shouldUseTextParser(bytes) {
+        const text = textDecoder.decode(bytes, { stream: false }).trimStart();
+        if (!text) return false;
+        if (/\{[0-9a-fA-F]{2}\}/.test(text)) return true;
+        if (text.includes('{') && text.includes('}')) return true;
+
+        const isPrintableText = /^[\x09\x0a\x0d\x20-\x7e]*$/.test(text);
+        const hasLineBreak = /[\r\n]/.test(text);
+        return isPrintableText && hasLineBreak && /[A-Za-z_:{},]/.test(text);
+    }
+
+    function canDecideBinary(bytes) {
+        const text = textDecoder.decode(bytes, { stream: false });
+        const isPrintableText = /^[\x09\x0a\x0d\x20-\x7e]*$/.test(text);
+        return bytes.length >= PACKET_SIZE && !isPrintableText;
     }
 
     // Bọc vòng lặp vào promise để có thể 'await' ở hàm disconnect
@@ -1431,10 +1654,14 @@ async function readSerialLoop() {
                     newBuffer.set(buffer);
                     newBuffer.set(value, buffer.length);
                     buffer = newBuffer;
+                    logLoraUartChunk(value, serialMode, buffer.length);
 
                     if (serialMode !== 'binary') {
-                        const previewText = textDecoder.decode(buffer, { stream: false }).trimStart();
-                        if (previewText.includes('{') || /^[\x09\x0a\x0d\x20-\x7e]*$/.test(previewText)) serialMode = 'json';
+                        if (shouldUseTextParser(buffer)) {
+                            if (serialMode !== 'json') appendLoraUartLog('MODE', 'Chuyển sang JSON/text.');
+                            serialMode = 'json';
+                            setLoraUartMode('JSON/text');
+                        }
                     }
 
                     if (serialMode === 'json') {
@@ -1443,20 +1670,56 @@ async function readSerialLoop() {
                         continue;
                     }
 
-                    if (!serialMode && buffer.length >= PACKET_SIZE) serialMode = 'binary';
+                    if (!serialMode && canDecideBinary(buffer)) {
+                        serialMode = 'binary';
+                        setLoraUartMode('Binary 16 byte');
+                        appendLoraUartLog('MODE', 'Chuyển sang binary 16 byte.');
+                    }
 
                     while (buffer.length >= PACKET_SIZE) {
+                        if (!binaryFrameSynced) {
+                            if (buffer.length < PACKET_SIZE * 2) break;
+
+                            const bestFrame = findBestBinaryFrame(buffer);
+                            if (!bestFrame) {
+                                appendLoraUartLog('SYNC', `Chưa tìm được frame hợp lệ, bỏ 1 byte: ${bytesToHex(buffer.slice(0, 1))}`);
+                                buffer = buffer.slice(1);
+                                continue;
+                            }
+
+                            if (bestFrame.offset > 0) {
+                                appendLoraUartLog('SYNC', `Bỏ ${bestFrame.offset} byte để căn frame. Frame=${bytesToHex(bestFrame.packet)}`);
+                                buffer = buffer.slice(bestFrame.offset);
+                            }
+                            binaryFrameSynced = true;
+                        }
+
                         const packet = buffer.slice(0, PACKET_SIZE);
+                        const parsedPacket = parseBinaryLoRaPacket(packet);
+                        const frameScore = scoreBinaryLoRaPacket(parsedPacket);
+                        if (frameScore < MIN_BINARY_FRAME_SCORE) {
+                            appendLoraUartLog('SYNC', `Mất đồng bộ frame, bỏ 1 byte. Packet nghi ngờ=${bytesToHex(packet)}`);
+                            binaryFrameSynced = false;
+                            buffer = buffer.slice(1);
+                            continue;
+                        }
+
                         buffer = buffer.slice(PACKET_SIZE);
-                        storeStationData(parseBinaryLoRaPacket(packet), 1); // Trạm 1 là LoRa
+                        logParsedLoraPacket('BINARY', parsedPacket, `HEX=${bytesToHex(packet)} -> `);
+                        storeStationData(parsedPacket, 1); // Trạm 1 là LoRa
                     }
                 }
             } catch (error) {
                 // Chỉ log lỗi nếu không phải do chúng ta chủ động ngắt
-                if (keepReading) console.error("Lỗi đọc dữ liệu:", error);
+                if (keepReading) {
+                    console.error("Lỗi đọc dữ liệu:", error);
+                    appendLoraUartLog('ERROR', `Lỗi đọc dữ liệu: ${error.message || error}`);
+                    setLoraUartMode('Lỗi đọc');
+                }
             } finally {
                 serialReader.releaseLock();
                 serialReader = null;
+                appendLoraUartLog('LOCK', 'Đã giải phóng Serial Reader Lock.');
                 console.log("Đã giải phóng Serial Reader Lock");
             }
         }
